@@ -4,28 +4,9 @@ import fakeredis
 import pytest
 from flask import Flask
 from flask_jwt_extended import JWTManager, create_access_token
-from sqlalchemy import Column, String, Table
 
 from legal_ml_core import db, init_ml_feature
-
-
-def _ensure_host_stub_tables():
-    """`users`/`projects` belong to the host app, not this package, but
-    SQLAlchemy's DDL emission needs *some* table object to resolve the
-    `ForeignKey("users.id")`/`ForeignKey("projects.id")` columns on this
-    package's own models against — `db.create_all()` fails with
-    `NoReferencedTableError` otherwise. A real host app supplies the real
-    tables; tests supply minimal stand-ins with just the referenced columns.
-    """
-    if "users" not in db.metadata.tables:
-        Table("users", db.metadata, Column("id", String(36), primary_key=True))
-    if "projects" not in db.metadata.tables:
-        Table(
-            "projects",
-            db.metadata,
-            Column("id", String(36), primary_key=True),
-            Column("user_id", String(36)),
-        )
+from legal_ml_core.db_utils import ensure_external_fk_stub_tables
 
 
 @pytest.fixture
@@ -51,7 +32,7 @@ def app(fake_redis, tmp_path):
     db.init_app(app)
     JWTManager(app)
     init_ml_feature(app, fake_redis, app.config["MODEL_FOLDER"], db=db)
-    _ensure_host_stub_tables()
+    ensure_external_fk_stub_tables(db)
 
     with app.app_context():
         db.create_all()

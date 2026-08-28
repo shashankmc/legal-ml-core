@@ -22,12 +22,18 @@ from flask import Flask
 
 from .compute.tasks import process_explanation_task, process_prediction_task, process_training_task
 from .db import db
+from .db_utils import ensure_external_fk_stub_tables
 
 
 def _build_worker_app(database_url):
     app = Flask(__name__)
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    # Unlike the Flask API process, the worker never imports the host app's
+    # own User/Project model definitions — register stand-ins so the
+    # Dataset/Model/TrainingJob/ModelComparison foreign keys into them can
+    # still resolve when SQLAlchemy configures mappers.
+    ensure_external_fk_stub_tables(db)
     db.init_app(app)
     return app
 
