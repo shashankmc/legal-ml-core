@@ -38,20 +38,26 @@ def generate_lime_explanation(model_data, text, num_features=10):
                     proba[i, pred] = 1.0
                 return proba
 
-        # Generate explanation
-        exp = explainer.explain_instance(
-            text, predict_fn, num_features=num_features, num_samples=1000
-        )
-
-        # Get prediction
+        # Get prediction first so we know which label to ask LIME to explain —
+        # explain_instance() only computes weights for the labels it's told
+        # about (default: just label 1), so passing the actual predicted
+        # class here is required, not optional. Fixed during extraction:
+        # the original code omitted `labels=`, so `exp.as_list(label=pred_idx)`
+        # below raised KeyError whenever the prediction wasn't class 1.
         cleaned_text = preprocessor.clean_text(text)
         X = vectorizer.transform([cleaned_text])
         prediction = model.predict(X)[0]
+        pred_idx = int(prediction)
 
         if label_encoder:
             predicted_class = label_encoder.inverse_transform([prediction])[0]
         else:
             predicted_class = str(prediction)
+
+        # Generate explanation
+        exp = explainer.explain_instance(
+            text, predict_fn, labels=[pred_idx], num_features=num_features, num_samples=1000
+        )
 
         # Extract explanation data
         explanation = {
@@ -61,7 +67,6 @@ def generate_lime_explanation(model_data, text, num_features=10):
         }
 
         # Get feature weights for predicted class
-        pred_idx = prediction
         for feature, weight in exp.as_list(label=pred_idx):
             explanation["features"].append(
                 {"feature": feature, "weight": float(weight)}
