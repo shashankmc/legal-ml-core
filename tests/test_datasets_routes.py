@@ -1,5 +1,6 @@
 import io
 
+from legal_ml_core import Dataset, db
 from legal_ml_core.routes.datasets import validate_dataset_file
 from tests.conftest import TEST_USER_ID
 
@@ -101,3 +102,38 @@ def test_datasets_are_scoped_to_owning_user(client, auth_headers, app):
 
     resp = client.get(f"/api/datasets/{other_id}", headers=auth_headers)
     assert resp.status_code == 404
+
+
+def test_paginated_rows_route(client, auth_headers, app, tmp_path):
+    """Full-data browsing serves any window (not just the first 10 rows)."""
+    csv_path = tmp_path / "rows.csv"
+    csv_path.write_text(
+        "text,label\n" + "\n".join(f"doc {i},A" for i in range(120))
+    )
+    with app.app_context():
+        dataset = Dataset(
+            user_id=TEST_USER_ID,
+            name="Rows",
+            file_path=str(csv_path),
+            row_count=120,
+            columns=["text", "label"],
+            task_type="classification",
+        )
+        db.session.add(dataset)
+        db.session.commit()
+        dataset_id = dataset.id
+
+    first = client.get(
+        f"/api/datasets/{dataset_id}/rows?offset=0&limit=50", headers=auth_headers
+    )
+    assert first.status_code == 200
+    body = first.get_json()
+    assert len(body["rows"]) == 50
+    assert body["total_rows"] == 120
+    assert body["has_more"] is True
+
+    last = client.get(
+        f"/api/datasets/{dataset_id}/rows?offset=100&limit=50", headers=auth_headers
+    )
+    assert len(last.get_json()["rows"]) == 20
+    assert last.get_json()["has_more"] is False

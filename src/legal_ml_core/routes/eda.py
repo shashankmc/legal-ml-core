@@ -436,7 +436,63 @@ def get_classification_analysis(df):
                 print(f"Error in text length analysis: {e}")
                 analysis["text_length_by_class"] = {}
 
+            # Most distinctive terms per class: the words that appear in a
+            # class far more often than elsewhere, so a user can see what each
+            # label actually captures ("interactive keywords per class").
+            try:
+                analysis["keywords_by_class"] = _keywords_by_class(
+                    df, text_col, label_col
+                )
+            except Exception as e:
+                print(f"Error in keyword analysis: {e}")
+                analysis["keywords_by_class"] = {}
+
     return analysis
+
+
+def _keywords_by_class(df, text_col, label_col, top_n=10):
+    """Return {class: [word, ...]} of terms over-represented in each class.
+
+    Uses a per-class document frequency ratio against the class's overall share,
+    which needs no extra dependencies and is stable on small legal datasets.
+    """
+    from sklearn.feature_extraction.text import CountVectorizer
+
+    vectorizer = CountVectorizer(
+        stop_words="english", ngram_range=(1, 1), max_features=2000, binary=True
+    )
+    texts = df[text_col].astype(str).fillna("")
+    try:
+        matrix = vectorizer.fit_transform(texts)
+    except ValueError:
+        return {}
+
+    terms = vectorizer.get_feature_names_out()
+    labels = df[label_col].astype(str)
+    total_docs = len(labels)
+    if total_docs == 0:
+        return {}
+
+    result = {}
+    for label in labels.unique():
+        mask = (labels == label).to_numpy()
+        class_docs = int(mask.sum())
+        if class_docs == 0:
+            continue
+        present = matrix[mask].sum(axis=0).A1  # docs in class containing term
+        overall = matrix.sum(axis=0).A1  # docs overall containing term
+        with np.errstate(divide="ignore", invalid="ignore"):
+            class_rate = present / class_docs
+            overall_rate = overall / total_docs
+            lift = np.where(overall_rate > 0, class_rate / overall_rate, 0)
+        top_idx = np.argsort(lift)[::-1]
+        keywords = [
+            terms[i]
+            for i in top_idx
+            if present[i] >= max(2, int(0.1 * class_docs)) and lift[i] > 1.0
+        ][:top_n]
+        result[str(label)] = keywords
+    return result
 
 
 def get_ner_analysis(df):

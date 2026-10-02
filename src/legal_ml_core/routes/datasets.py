@@ -315,6 +315,56 @@ def preview_dataset(dataset_id):
         return jsonify({"error": str(e)}), 500
 
 
+@datasets_bp.route("/<dataset_id>/rows", methods=["GET"])
+@jwt_required()
+def paginated_dataset_rows(dataset_id):
+    """Paginated full-data browsing (HuggingFace-style dataset viewer).
+
+    `preview_dataset` only returns the first 10 rows; this serves any window of
+    the file so the UI can navigate the whole dataset without loading it all.
+    """
+    try:
+        user_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        if not dataset:
+            return jsonify({"error": "Dataset not found"}), 404
+
+        offset = max(0, request.args.get("offset", default=0, type=int))
+        limit = request.args.get("limit", default=50, type=int)
+        limit = min(max(1, limit), 200)
+
+        if dataset.file_path.endswith(".csv"):
+            df = pd.read_csv(dataset.file_path)
+        elif dataset.file_path.endswith(".xlsx"):
+            df = pd.read_excel(dataset.file_path)
+        elif dataset.file_path.endswith(".json"):
+            df = pd.read_json(dataset.file_path)
+        else:
+            return jsonify({"error": "Unsupported file format"}), 400
+
+        total = len(df)
+        window = df.iloc[offset : offset + limit]
+        # NaN is not valid JSON; pandas' `to_dict` keeps it as float('nan').
+        rows = json.loads(window.to_json(orient="records", date_format="iso"))
+
+        return (
+            jsonify(
+                {
+                    "rows": rows,
+                    "columns": list(df.columns),
+                    "total_rows": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + limit < total,
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @datasets_bp.route("/<dataset_id>/preprocessing-options", methods=["GET"])
 @jwt_required()
 def get_preprocessing_options(dataset_id):

@@ -2,6 +2,7 @@ import json
 
 import joblib
 import numpy as np
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.decomposition import NMF, LatentDirichletAllocation
 from sklearn.ensemble import RandomForestClassifier
@@ -62,7 +63,11 @@ class MLModelTrainer:
         texts = df[text_column].apply(self.preprocessor.clean_text)
 
         # Handle different task types
-        if task_type in ["classification", "document_classification"]:
+        if task_type in [
+            "classification",
+            "document_classification",
+            "judgment_prediction",
+        ]:
             # Assume second column is label
             if len(df.columns) < 2:
                 raise ValueError("Classification datasets must have at least 2 columns")
@@ -131,11 +136,15 @@ class MLModelTrainer:
 
         # Create model based on type
         if model_type == "svm":
+            # SVM scores are not probabilities: SVC without probability=True has
+            # no predict_proba at all. Enable it so downstream calibration (and
+            # the confidence display) has something to work with.
             self.model = SVC(
                 kernel=parameters.get("kernel", "rbf"),
                 C=parameters.get("C", 1.0),
                 gamma=parameters.get("gamma", "scale"),
                 degree=parameters.get("degree", 3),
+                probability=True,
                 random_state=42,
             )
         elif model_type == "decision_tree":
@@ -172,6 +181,27 @@ class MLModelTrainer:
         # Train model
         self.model.fit(X_train, y_train)
 
+        # Calibrate probabilities on a held-out split so displayed confidence is
+        # closer to a true probability. Not all classifiers expose probabilities
+        # in a comparable way (naive_bayes is already roughly calibrated), and
+        # calibration can fail on tiny/degenerate datasets — so it is best-effort
+        # and never blocks training.
+        calibrated = False
+        proba_params = dict(parameters)
+        # Equal-size CalibratedClassifierCV folds need at least 2 samples per class.
+        n_classes = len(set(y_train))
+        if self.model is not None and hasattr(self.model, "predict_proba") and n_classes > 1:
+            try:
+                self.model = CalibratedClassifierCV(
+                    self.model, method="sigmoid", cv=3
+                )
+                self.model.fit(X_train, y_train)
+                calibrated = True
+            except Exception:
+                # Fall back to the uncalibrated estimator.
+                self.model = self.model.estimator if hasattr(self.model, "estimator") else self.model
+                calibrated = False
+
         # Evaluate model
         y_pred = self.model.predict(X_test)
 
@@ -187,6 +217,7 @@ class MLModelTrainer:
                 y_test, y_pred, zero_division=0,
                 target_names=label_names
             ),
+            "probabilities_calibrated": calibrated,
         }
 
         # Also store in Redis for backward compatibility
@@ -335,6 +366,9 @@ class MLModelTrainer:
             "perplexity": getattr(self.model, "perplexity", lambda x: 0)(X)
             if hasattr(self.model, "perplexity")
             else 0,
+            # Persisted (not just Redis) so the UI can suggest human-readable
+            # names for topics long after the 24h Redis cache expires.
+            "topic_keywords": topics,
         }
 
         return metrics
