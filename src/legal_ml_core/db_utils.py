@@ -9,17 +9,6 @@ rather than queries directly.
 from flask import current_app
 
 
-def ensure_external_fk_stub_tables(db):
-    """Deprecated no-op.
-
-    Kept so existing hosts/workers importing it don't break. It previously
-    fabricated `users`/`projects` Table objects so the package's foreign keys
-    could resolve in the worker process; those foreign keys have been removed in
-    favour of an opaque owner id, so there is nothing to stub.
-    """
-    return None
-
-
 def project_belongs_to_owner(session, project_id, owner_id):
     """True if `project_id` is a valid project reference for this owner.
 

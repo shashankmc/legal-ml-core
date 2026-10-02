@@ -73,8 +73,8 @@ def test_no_host_models_required(monkeypatch, tmp_path):
     init_ml_feature(app, fakeredis.FakeStrictRedis(decode_responses=True), app.config["MODEL_FOLDER"], db=db)
 
     with app.app_context():
-        # create_all succeeds without any host model registered — previously this
-        # needed ensure_external_fk_stub_tables() to fabricate users/projects.
+        # create_all succeeds without any host model registered — the package
+        # has no foreign keys into host tables any more.
         db.create_all()
         names = set(db.metadata.tables)
         assert "datasets" in names and "models" in names
