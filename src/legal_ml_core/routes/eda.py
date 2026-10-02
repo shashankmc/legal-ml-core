@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import json
 from flask import Blueprint, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from ..auth import jwt_required, get_jwt_identity
 from ..models import Dataset
 import os
 import plotly.graph_objects as go
