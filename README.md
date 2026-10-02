@@ -68,6 +68,15 @@ Flask-SQLAlchemy 3.0.5. Sharing this package's own `db` instance is the only
 combination confirmed to work. (Increment 4 of the reusability plan inverts
 this so the host provides `db`; until then the package owns it.)
 
+## Packaged into host images
+
+Hosts commonly vendor this package into more than one image (e.g. a Flask API
+image and a separate worker image). Because the package is copied at build time,
+a change here only takes effect after **every** image that vendors it is
+rebuilt — rebuilding just the API image leaves a stale worker running the old
+models. Rebuild all of them (in BAIGLE, `docker compose build` with no service
+argument).
+
 ## Running the worker
 
 ```python
