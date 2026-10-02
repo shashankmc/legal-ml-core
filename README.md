@@ -19,6 +19,8 @@ representations of the same database schema).
 - Experiment monitoring: per-training-job metric time series (dense for the
   HuggingFace Trainer path, coarse phase markers for classical sklearn
   algorithms) and cross-run hyperparameter-vs-performance comparison
+- Pluggable ownership: opaque `owner_id` scoped by a Keycloak subject, a host
+  resolver, or nothing (single-tenant) — no local user table required
 
 Out of scope (stays in the host app): auth, generic project CRUD, and the
 unrelated "learning platform" tutorials feature (including its sandboxed
@@ -39,17 +41,32 @@ redis_client = redis.Redis.from_url("redis://...")
 init_ml_feature(app, redis_client, model_storage_path="/app/models", db=db)
 ```
 
-**Important**: your host app's own models (User, Project, etc.) must
-subclass `db.Model` from *this* package (`from legal_ml_core import db`), not
-a separately-constructed `SQLAlchemy()` instance. Flask-SQLAlchemy's
+**Ownership is pluggable and needs no local user table.** ML rows carry an
+opaque `owner_id`, resolved by an `OwnerRef` strategy. The default,
+`KeycloakOwnerRef`, uses the token `sub` — so a host that authenticates with
+Keycloak needs no `users`/`projects` tables at all:
+
+```python
+app.config["OWNER_REF"] = KeycloakOwnerRef()          # default; sub is the owner
+# or: HostModelOwnerRef(lambda payload: my_resolver(payload))  # host user model
+# or: NoOwnerRef()                                            # single-tenant, no auth
+```
+
+Projects are optional: without a host `PROJECT_VALIDATOR` callable, a non-empty
+`project_id` is treated as an opaque reference the host owns.
+
+> The earlier hard foreign keys into `users`/`projects` (and the stub tables the
+> worker used to fabricate) were removed in the reusability refactor; see
+> `docs/legal-ml-core-reusability-plan.md` in the BAIGLE repo.
+
+**Important**: if your host has its own models, they must subclass `db.Model`
+from *this* package (`from legal_ml_core import db`), not a
+separately-constructed `SQLAlchemy()` instance. Flask-SQLAlchemy's
 `model_class=` parameter does **not** let two independently-constructed
 declarative bases share one mapper registry — verified directly against
-Flask-SQLAlchemy 3.0.5, where passing a custom SQLAlchemy-2.0-style
-`DeclarativeBase` either produces a second, separate registry or raises
-`ArgumentError: already has a primary mapper defined`. Sharing this
-package's own `db` instance is the only combination that was confirmed to
-work: it's what makes host-side string relationships like `User.datasets` or
-`Project.datasets` resolve correctly.
+Flask-SQLAlchemy 3.0.5. Sharing this package's own `db` instance is the only
+combination confirmed to work. (Increment 4 of the reusability plan inverts
+this so the host provides `db`; until then the package owns it.)
 
 ## Running the worker
 
