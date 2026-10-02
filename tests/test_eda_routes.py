@@ -34,7 +34,7 @@ def test_eda_route_end_to_end(client, auth_headers, app, tmp_path):
 
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="EDA dataset",
             file_path=str(csv_path),
             row_count=4,

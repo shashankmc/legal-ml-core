@@ -6,7 +6,6 @@ import pytest
 from flask import Flask
 
 from legal_ml_core import db, init_ml_feature
-from legal_ml_core.db_utils import ensure_external_fk_stub_tables
 
 
 @pytest.fixture
@@ -31,11 +30,17 @@ def app(fake_redis, tmp_path):
 
     db.init_app(app)
     init_ml_feature(app, fake_redis, app.config["MODEL_FOLDER"], db=db)
-    ensure_external_fk_stub_tables(db)
 
-    # These route tests exercise ML endpoints, not the host's identity
-    # provisioning; resolve every token to the fixed test user id.
-    app.config["IDENTITY_RESOLVER"] = lambda payload: {"id": payload.get("sub")}
+    # Ownership defaults to the Keycloak subject claim (no local users table);
+    # tests use TEST_USER_ID as both the token `sub` and the owner id.
+    #
+    # Projects are a host concern. These tests install a trivial validator that
+    # recognises ids recorded in a set, mirroring how a real host would plug in
+    # its own project table — without the package carrying a `projects` table.
+    app.config["PROJECT_VALIDATOR"] = (
+        lambda session, project_id, owner_id: (project_id, owner_id)
+        in app.config.setdefault("_known_projects", set())
+    )
 
     with app.app_context():
         db.create_all()

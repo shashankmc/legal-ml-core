@@ -17,6 +17,13 @@ from .models import (
     TrainingJob,
     TrainingMetricPoint,
 )
+from .ownership import (
+    HostModelOwnerRef,
+    KeycloakOwnerRef,
+    NoOwnerRef,
+    OwnerRef,
+    owner_ref,
+)
 from .worker import run_ml_worker
 
 __all__ = [
@@ -28,8 +35,13 @@ __all__ = [
     "get_jwt_identity",
     "init_ml_feature",
     "jwt_required",
+    "owner_ref",
     "run_ml_worker",
     "verify_bearer_token",
+    "HostModelOwnerRef",
+    "KeycloakOwnerRef",
+    "NoOwnerRef",
+    "OwnerRef",
     "Dataset",
     "Model",
     "TrainingJob",

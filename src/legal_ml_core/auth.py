@@ -111,26 +111,34 @@ def _bearer_token():
 
 
 def authenticate_request():
-    """Authenticate the current request, resolve the local user, return it."""
+    """Authenticate the request and resolve the owner (and optional user).
+
+    The owner id is produced by the configured ``OwnerRef`` strategy
+    (ownership.py). By default that is the Keycloak ``sub`` claim, so no local
+    user table is required. A host that still wants to JIT-provision a local row
+    can set ``IDENTITY_RESOLVER``; its result is exposed via ``current_user()``
+    and its id wins as the owner id only when the strategy is
+    ``HostModelOwnerRef`` (the host wires that, or leaves the default and just
+    uses the resolver for the user object).
+    """
+    from .ownership import owner_ref
+
     payload = verify_bearer_token(_bearer_token())
 
     if not payload.get("sub"):
         raise AuthError("Access token has no subject.")
 
     resolver = current_app.config.get("IDENTITY_RESOLVER")
-    if resolver is None:
-        raise AuthError(
-            "No identity resolver is configured on the application.",
-            status_code=500,
-        )
+    user = resolver(payload) if resolver is not None else None
 
-    user = resolver(payload)
-    if user is None:
-        raise AuthError("Authenticated identity is not permitted.")
+    try:
+        owner_id = owner_ref().resolve_owner_id(payload)
+    except ValueError as exc:
+        raise AuthError(str(exc))
 
     g.current_user = user
     g.jwt_payload = payload
-    g.jwt_identity = str(user["id"] if isinstance(user, dict) else user.id)
+    g.jwt_identity = owner_id
     return user
 
 
@@ -162,7 +170,11 @@ def jwt_required(*decorator_args, **decorator_kwargs):
 
 
 def get_jwt_identity():
-    """Return the resolved local user id, matching flask_jwt_extended's shape."""
+    """Return the current owner id (opaque), matching flask_jwt_extended's shape.
+
+    Historically this was the local user id; it is now the owner id produced by
+    the configured OwnerRef strategy (Keycloak `sub` by default).
+    """
     return getattr(g, "jwt_identity", None)
 
 

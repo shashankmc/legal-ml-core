@@ -89,7 +89,7 @@ def test_datasets_are_scoped_to_owning_user(client, auth_headers, app):
 
     with app.app_context():
         other = Dataset(
-            user_id="other-user",
+            owner_id="other-user",
             name="Not mine",
             file_path="/tmp/x.csv",
             row_count=1,
@@ -112,7 +112,7 @@ def test_paginated_rows_route(client, auth_headers, app, tmp_path):
     )
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="Rows",
             file_path=str(csv_path),
             row_count=120,

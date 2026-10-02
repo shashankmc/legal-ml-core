@@ -42,8 +42,8 @@ eda_bp = Blueprint("eda", __name__)
 @jwt_required()
 def get_eda_analysis(dataset_id):
     try:
-        user_id = get_jwt_identity()
-        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, owner_id=owner_id).first()
 
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
@@ -81,8 +81,8 @@ def get_eda_analysis(dataset_id):
 @jwt_required()
 def get_eda_visualizations(dataset_id):
     try:
-        user_id = get_jwt_identity()
-        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, owner_id=owner_id).first()
 
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404

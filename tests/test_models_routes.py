@@ -7,7 +7,7 @@ from tests.conftest import TEST_USER_ID
 def _make_dataset(app):
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="D1",
             file_path="/tmp/d1.csv",
             row_count=10,
@@ -99,7 +99,7 @@ def test_predict_returns_504_when_worker_never_responds(client, auth_headers, ap
     dataset_id = _make_dataset(app)
     with app.app_context():
         model = Model(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             dataset_id=dataset_id,
             name="Trained SVM",
             model_type="svm",
@@ -151,7 +151,7 @@ def test_create_model_rejects_incompatible_model(client, auth_headers, app):
 def test_update_model_labels_persists_display_names(client, auth_headers, app):
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="topics",
             file_path="/tmp/topics.csv",
             row_count=10,

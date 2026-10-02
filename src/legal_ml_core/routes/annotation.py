@@ -5,7 +5,7 @@ from datetime import datetime
 import json
 from ..db import db
 from ..models import Dataset, AnnotationTask
-from ..db_utils import project_belongs_to_user
+from ..db_utils import project_belongs_to_owner
 
 # url_prefix is supplied by init_ml_feature at registration time, alongside the
 # other five blueprints, rather than baked in here.
@@ -15,9 +15,9 @@ annotation_bp = Blueprint("annotation", __name__)
 @annotation_bp.route("/projects/<project_id>/queue/next", methods=["GET"])
 @jwt_required()
 def get_next_annotation_task(project_id):
-    user_id = get_jwt_identity()
+    owner_id = get_jwt_identity()
 
-    if not project_belongs_to_user(db.session, project_id, user_id):
+    if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
 
     query = AnnotationTask.query.join(Dataset).filter(
@@ -78,9 +78,9 @@ def get_next_annotation_task(project_id):
 @annotation_bp.route("/projects/<project_id>/queue/stats", methods=["GET"])
 @jwt_required()
 def get_annotation_queue_stats(project_id):
-    user_id = get_jwt_identity()
+    owner_id = get_jwt_identity()
 
-    if not project_belongs_to_user(db.session, project_id, user_id):
+    if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
 
     total_tasks = (
@@ -119,7 +119,7 @@ def get_annotation_queue_stats(project_id):
 @annotation_bp.route("/tasks/<task_id>/save", methods=["POST"])
 @jwt_required()
 def save_annotation(task_id):
-    user_id = get_jwt_identity()
+    owner_id = get_jwt_identity()
     data = request.get_json()
 
     task = AnnotationTask.query.get(task_id)
@@ -130,7 +130,7 @@ def save_annotation(task_id):
     if not dataset:
         return jsonify({"success": False, "error": "Dataset not found for this task"}), 404
 
-    if str(dataset.user_id) != str(user_id):
+    if str(dataset.owner_id) != str(owner_id):
         return jsonify({"success": False, "error": "Unauthorized"}), 403
 
     try:
@@ -158,14 +158,14 @@ def save_annotation(task_id):
 @annotation_bp.route("/tasks/<task_id>/skip", methods=["POST"])
 @jwt_required()
 def skip_annotation(task_id):
-    user_id = get_jwt_identity()
+    owner_id = get_jwt_identity()
 
     task = AnnotationTask.query.get(task_id)
     if not task:
         return jsonify({"success": False, "error": "Task not found"}), 404
 
     dataset = Dataset.query.get(task.dataset_id)
-    if not dataset or str(dataset.user_id) != str(user_id):
+    if not dataset or str(dataset.owner_id) != str(owner_id):
         return jsonify({"success": False, "error": "Unauthorized"}), 403
 
     try:
@@ -183,14 +183,14 @@ def skip_annotation(task_id):
 @annotation_bp.route("/tasks/<task_id>", methods=["GET"])
 @jwt_required()
 def get_annotation_task(task_id):
-    user_id = get_jwt_identity()
+    owner_id = get_jwt_identity()
 
     task = AnnotationTask.query.get(task_id)
     if not task:
         return jsonify({"success": False, "error": "Task not found"}), 404
 
     dataset = Dataset.query.get(task.dataset_id)
-    if not dataset or str(dataset.user_id) != str(user_id):
+    if not dataset or str(dataset.owner_id) != str(owner_id):
         return jsonify({"success": False, "error": "Unauthorized"}), 403
 
     return jsonify({"success": True, "task": task.to_dict()}), 200
@@ -199,9 +199,9 @@ def get_annotation_task(task_id):
 @annotation_bp.route("/projects/<project_id>/tasks", methods=["GET"])
 @jwt_required()
 def list_annotation_tasks(project_id):
-    user_id = get_jwt_identity()
+    owner_id = get_jwt_identity()
 
-    if not project_belongs_to_user(db.session, project_id, user_id):
+    if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
 
     status = request.args.get("status")
@@ -220,9 +220,9 @@ def list_annotation_tasks(project_id):
 @annotation_bp.route("/projects/<project_id>/tasks/reset", methods=["POST"])
 @jwt_required()
 def reset_annotation_tasks(project_id):
-    user_id = get_jwt_identity()
+    owner_id = get_jwt_identity()
 
-    if not project_belongs_to_user(db.session, project_id, user_id):
+    if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
 
     try:

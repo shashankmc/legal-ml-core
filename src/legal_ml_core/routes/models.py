@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from ..db import db
 from ..models import Model, Dataset, TrainingJob
-from ..db_utils import project_belongs_to_user
+from ..db_utils import project_belongs_to_owner
 import os
 import json
 
@@ -482,10 +482,10 @@ def get_available_models():
 @jwt_required()
 def get_models():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         dataset_id = request.args.get("dataset_id")
 
-        query = Model.query.filter_by(user_id=user_id)
+        query = Model.query.filter_by(owner_id=owner_id)
         if dataset_id:
             query = query.filter_by(dataset_id=dataset_id)
 
@@ -501,8 +501,8 @@ def get_models():
 @jwt_required()
 def get_model(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -517,7 +517,7 @@ def get_model(model_id):
 @jwt_required()
 def create_model():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json()
 
         # Validate required fields
@@ -528,7 +528,7 @@ def create_model():
 
         # Check if dataset exists and belongs to user
         dataset = Dataset.query.filter_by(
-            id=data["dataset_id"], user_id=user_id
+            id=data["dataset_id"], owner_id=owner_id
         ).first()
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
@@ -606,7 +606,7 @@ def create_model():
         # a direct query against the `projects` table rather than importing its ORM class.
         explicit_project_id = data.get("project_id")
         if explicit_project_id:
-            if not project_belongs_to_user(db.session, explicit_project_id, user_id):
+            if not project_belongs_to_owner(db.session, explicit_project_id, owner_id):
                 return jsonify({"error": "Project not found"}), 404
             resolved_project_id = explicit_project_id
         else:
@@ -614,7 +614,7 @@ def create_model():
 
         # Create model
         model = Model(
-            user_id=user_id,
+            owner_id=owner_id,
             dataset_id=data["dataset_id"],
             project_id=resolved_project_id,
             name=data["name"],
@@ -641,8 +641,8 @@ def create_model():
 @jwt_required()
 def update_model(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -681,8 +681,8 @@ def update_model_labels(model_id):
     presentation in the UI.
     """
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
@@ -717,8 +717,8 @@ def update_model_labels(model_id):
 @jwt_required()
 def delete_model(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -742,8 +742,8 @@ def delete_model(model_id):
 @jwt_required()
 def download_model(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -773,8 +773,8 @@ def download_model(model_id):
 @jwt_required()
 def get_model_file(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -813,7 +813,7 @@ def explain_model(model_id):
     actually exercise this endpoint needs it to be reachable.
     """
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json()
 
         if not data or "text" not in data:
@@ -833,7 +833,7 @@ def explain_model(model_id):
         # Check if user owns the model or it's public. `is_public` isn't a real
         # column on Model (pre-existing gap in the original app) — default to
         # False via getattr rather than letting this raise AttributeError.
-        if model.user_id != user_id and not getattr(model, "is_public", False):
+        if model.owner_id != owner_id and not getattr(model, "is_public", False):
             return jsonify({"error": "Unauthorized"}), 403
 
         # Check if model is trained
@@ -851,7 +851,7 @@ def explain_model(model_id):
             "model_id": model_id,
             "text": text,
             "method": method,
-            "user_id": user_id,
+            "owner_id": owner_id,
         }
 
         current_app.redis_client.lpush("explanation_queue", json.dumps(task_data))
@@ -922,7 +922,7 @@ def explain_model_batch(model_id):
     Same pre-existing routing fix as explain_model above.
     """
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json()
 
         if not data or "texts" not in data:
@@ -946,7 +946,7 @@ def explain_model_batch(model_id):
             return jsonify({"error": "Model not found"}), 404
 
         # Check if user owns the model or it's public
-        if model.user_id != user_id and not getattr(model, "is_public", False):
+        if model.owner_id != owner_id and not getattr(model, "is_public", False):
             return jsonify({"error": "Unauthorized"}), 403
 
         # Check if model is trained
@@ -967,7 +967,7 @@ def explain_model_batch(model_id):
                 "model_id": model_id,
                 "text": text,
                 "method": method,
-                "user_id": user_id,
+                "owner_id": owner_id,
             }
 
             current_app.redis_client.lpush("explanation_queue", json.dumps(task_data))
@@ -999,8 +999,8 @@ def predict(model_id):
     try:
         import uuid
 
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -1023,7 +1023,7 @@ def predict(model_id):
             "model_id": str(model_id),
             "model_type": model.model_type,
             "texts": texts,
-            "user_id": str(user_id),
+            "owner_id": str(owner_id),
         }
 
         TRANSFORMER_MODELS = {"legalbert", "roberta"}
@@ -1055,11 +1055,11 @@ def predict(model_id):
 def train_model(model_id):
     """Start training a model"""
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json() if request.is_json else {}
 
         # Get model and verify ownership
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
@@ -1080,7 +1080,7 @@ def train_model(model_id):
             return jsonify({"error": compat_error}), 400
 
         # Create training job
-        training_job = TrainingJob(user_id=user_id, model_id=model_id, status="pending")
+        training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
 
         db.session.add(training_job)
 

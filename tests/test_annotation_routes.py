@@ -1,21 +1,15 @@
-from sqlalchemy import text
-
 from legal_ml_core import AnnotationTask, Dataset, db
 from tests.conftest import TEST_USER_ID
 
 
-def _make_project_and_dataset(app, project_id="proj-1", user_id=TEST_USER_ID):
-    """The `projects` stub table is created by conftest's `_ensure_host_stub_tables()`
-    (belongs to the host app, not this package — see db_utils.py); this just
-    inserts a row so project_belongs_to_user's raw query has something to match.
+def _make_project_and_dataset(app, project_id="proj-1", owner_id=TEST_USER_ID):
+    """Projects are a host concern; register this (project, owner) pair with the
+    conftest project validator, then create the dataset/task it scopes.
     """
     with app.app_context():
-        db.session.execute(
-            text("INSERT INTO projects (id, user_id) VALUES (:id, :uid)"),
-            {"id": project_id, "uid": user_id},
-        )
+        app.config.setdefault("_known_projects", set()).add((project_id, owner_id))
         dataset = Dataset(
-            user_id=user_id,
+            owner_id=owner_id,
             name="Annotated dataset",
             file_path="/tmp/a.csv",
             row_count=2,
@@ -62,7 +56,7 @@ def test_skip_annotation(client, auth_headers, app):
 
 
 def test_annotation_queue_requires_owned_project(client, auth_headers, app):
-    project_id, _, _ = _make_project_and_dataset(app, project_id="proj-2", user_id="someone-else")
+    project_id, _, _ = _make_project_and_dataset(app, project_id="proj-2", owner_id="someone-else")
 
     resp = client.get(f"/api/annotation/projects/{project_id}/queue/next", headers=auth_headers)
     assert resp.status_code == 404

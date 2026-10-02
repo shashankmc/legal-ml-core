@@ -15,8 +15,8 @@ visualization_bp = Blueprint("visualization", __name__)
 @jwt_required()
 def get_model_performance(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -73,8 +73,8 @@ def get_model_performance(model_id):
 @jwt_required()
 def get_confusion_matrix(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -131,8 +131,8 @@ def get_confusion_matrix(model_id):
 @jwt_required()
 def get_feature_importance(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -201,8 +201,8 @@ def get_feature_importance(model_id):
 @jwt_required()
 def get_clustering_visualization(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -287,8 +287,8 @@ def get_clustering_visualization(model_id):
 @jwt_required()
 def get_topic_modeling_visualization(model_id):
     try:
-        user_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
@@ -349,7 +349,7 @@ def get_topic_modeling_visualization(model_id):
 @jwt_required()
 def create_model_comparison():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json()
 
         if "name" not in data or "model_ids" not in data:
@@ -362,7 +362,7 @@ def create_model_comparison():
         # Verify all models belong to user and are completed
         models = []
         for model_id in model_ids:
-            model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+            model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
             if not model:
                 return jsonify({"error": f"Model {model_id} not found"}), 404
             if model.status != "completed":
@@ -408,7 +408,7 @@ def create_model_comparison():
 
         # Save comparison
         comparison = ModelComparison(
-            user_id=user_id,
+            owner_id=owner_id,
             name=data["name"],
             model_ids=model_ids,
             comparison_metrics={
@@ -440,9 +440,9 @@ def create_model_comparison():
 @jwt_required()
 def get_model_comparisons():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         comparisons = (
-            ModelComparison.query.filter_by(user_id=user_id)
+            ModelComparison.query.filter_by(owner_id=owner_id)
             .order_by(ModelComparison.created_at.desc())
             .all()
         )
@@ -462,9 +462,9 @@ def get_model_comparisons():
 @jwt_required()
 def get_model_comparison(comparison_id):
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         comparison = ModelComparison.query.filter_by(
-            id=comparison_id, user_id=user_id
+            id=comparison_id, owner_id=owner_id
         ).first()
 
         if not comparison:
@@ -486,7 +486,7 @@ def get_parameter_comparison():
     existing Model.parameters/TrainingJob.metrics) — no new schema needed.
     """
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         model_type = request.args.get("model_type")
         metric = request.args.get("metric", "accuracy")
 
@@ -494,7 +494,7 @@ def get_parameter_comparison():
             return jsonify({"error": "model_type is required"}), 400
 
         models = Model.query.filter_by(
-            user_id=user_id, model_type=model_type, status="completed"
+            owner_id=owner_id, model_type=model_type, status="completed"
         ).all()
 
         points = []

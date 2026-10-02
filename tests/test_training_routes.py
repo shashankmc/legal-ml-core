@@ -7,7 +7,7 @@ from tests.conftest import TEST_USER_ID
 def _make_model_and_job(app):
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="D1",
             file_path="/tmp/d1.csv",
             row_count=10,
@@ -17,7 +17,7 @@ def _make_model_and_job(app):
         db.session.add(dataset)
         db.session.flush()
         model = Model(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             dataset_id=dataset.id,
             name="M1",
             model_type="svm",
@@ -26,7 +26,7 @@ def _make_model_and_job(app):
         )
         db.session.add(model)
         db.session.flush()
-        job = TrainingJob(user_id=TEST_USER_ID, model_id=model.id, status="running")
+        job = TrainingJob(owner_id=TEST_USER_ID, model_id=model.id, status="running")
         db.session.add(job)
         db.session.commit()
         return model.id, job.id
@@ -35,7 +35,7 @@ def _make_model_and_job(app):
 def test_start_training_queues_task(client, auth_headers, app, fake_redis):
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="D1",
             file_path="/tmp/d1.csv",
             row_count=10,
@@ -45,7 +45,7 @@ def test_start_training_queues_task(client, auth_headers, app, fake_redis):
         db.session.add(dataset)
         db.session.flush()
         model = Model(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             dataset_id=dataset.id,
             name="M1",
             model_type="svm",

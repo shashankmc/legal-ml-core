@@ -5,7 +5,7 @@ from tests.conftest import TEST_USER_ID
 def _make_dataset(app):
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="D1",
             file_path="/tmp/d1.csv",
             row_count=10,
@@ -21,7 +21,7 @@ def test_model_performance_requires_completed_model_with_metrics(client, auth_he
     dataset_id = _make_dataset(app)
     with app.app_context():
         model = Model(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             dataset_id=dataset_id,
             name="M1",
             model_type="svm",
@@ -53,7 +53,7 @@ def test_parameter_comparison_across_runs(client, auth_headers, app):
     with app.app_context():
         for lr, acc in [(0.01, 0.7), (0.1, 0.85)]:
             model = Model(
-                user_id=TEST_USER_ID,
+                owner_id=TEST_USER_ID,
                 dataset_id=dataset_id,
                 name=f"svm-{lr}",
                 model_type="svm",
@@ -64,7 +64,7 @@ def test_parameter_comparison_across_runs(client, auth_headers, app):
             db.session.add(model)
             db.session.flush()
             job = TrainingJob(
-                user_id=TEST_USER_ID,
+                owner_id=TEST_USER_ID,
                 model_id=model.id,
                 status="completed",
                 metrics={"accuracy": acc},

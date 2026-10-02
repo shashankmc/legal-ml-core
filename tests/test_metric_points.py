@@ -7,7 +7,7 @@ from tests.conftest import TEST_USER_ID
 def _make_job(app):
     with app.app_context():
         dataset = Dataset(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             name="D1",
             file_path="/tmp/d.csv",
             row_count=1,
@@ -17,7 +17,7 @@ def _make_job(app):
         db.session.add(dataset)
         db.session.flush()
         model = Model(
-            user_id=TEST_USER_ID,
+            owner_id=TEST_USER_ID,
             dataset_id=dataset.id,
             name="M1",
             model_type="legalbert",
@@ -26,7 +26,7 @@ def _make_job(app):
         )
         db.session.add(model)
         db.session.flush()
-        job = TrainingJob(user_id=TEST_USER_ID, model_id=model.id, status="running")
+        job = TrainingJob(owner_id=TEST_USER_ID, model_id=model.id, status="running")
         db.session.add(job)
         db.session.commit()
         return job.id

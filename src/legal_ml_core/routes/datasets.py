@@ -221,11 +221,11 @@ def validate_dataset_file(file_path, task_type, annotation_mode=False):
 @jwt_required()
 def get_datasets():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         # Get all datasets for the user that are not already associated with a project
         # (optional: can include all datasets by removing the project_id filter)
         datasets = (
-            Dataset.query.filter_by(user_id=user_id)
+            Dataset.query.filter_by(owner_id=owner_id)
             .order_by(Dataset.created_at.desc())
             .all()
         )
@@ -248,8 +248,8 @@ def get_datasets():
 @jwt_required()
 def get_dataset(dataset_id):
     try:
-        user_id = get_jwt_identity()
-        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, owner_id=owner_id).first()
 
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
@@ -264,7 +264,7 @@ def get_dataset(dataset_id):
 @jwt_required()
 def upload_dataset():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
 
         # Check if file is present
         if "file" not in request.files:
@@ -356,7 +356,7 @@ def upload_dataset():
 
         # Create dataset record
         dataset = Dataset(
-            user_id=user_id,
+            owner_id=owner_id,
             name=name,
             description=description,
             file_path=file_path,
@@ -401,8 +401,8 @@ def get_task_types():
 @jwt_required()
 def preview_dataset(dataset_id):
     try:
-        user_id = get_jwt_identity()
-        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, owner_id=owner_id).first()
 
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
@@ -444,8 +444,8 @@ def paginated_dataset_rows(dataset_id):
     the file so the UI can navigate the whole dataset without loading it all.
     """
     try:
-        user_id = get_jwt_identity()
-        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, owner_id=owner_id).first()
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
 
@@ -489,8 +489,8 @@ def paginated_dataset_rows(dataset_id):
 @jwt_required()
 def get_preprocessing_options(dataset_id):
     try:
-        user_id = get_jwt_identity()
-        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, owner_id=owner_id).first()
 
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
@@ -594,8 +594,8 @@ def get_preprocessing_options(dataset_id):
 @jwt_required()
 def delete_dataset(dataset_id):
     try:
-        user_id = get_jwt_identity()
-        dataset = Dataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        dataset = Dataset.query.filter_by(id=dataset_id, owner_id=owner_id).first()
 
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404

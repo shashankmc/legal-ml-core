@@ -8,7 +8,7 @@ class Dataset(db.Model):
     __tablename__ = "datasets"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False)
+    owner_id = db.Column(db.String(36), nullable=False, index=True)
     name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
     file_path = db.Column(db.String(500), nullable=False)
@@ -17,7 +17,7 @@ class Dataset(db.Model):
     task_type = db.Column(
         db.String(50), nullable=False
     )  # classification, ner, summarization, etc.
-    project_id = db.Column(db.String(36), db.ForeignKey("projects.id"))
+    project_id = db.Column(db.String(36))
     dataset_type = db.Column(
         db.String(50), default="unlabeled"
     )  # 'unlabeled', 'training', 'test'
@@ -52,7 +52,7 @@ class Dataset(db.Model):
 
         return {
             "id": self.id,
-            "user_id": self.user_id,
+            "owner_id": self.owner_id,
             "name": self.name,
             "description": self.description,
             "file_path": self.file_path,
@@ -80,9 +80,9 @@ class Model(db.Model):
     __tablename__ = "models"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False)
+    owner_id = db.Column(db.String(36), nullable=False, index=True)
     dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False)
-    project_id = db.Column(db.String(36), db.ForeignKey("projects.id"), nullable=True)
+    project_id = db.Column(db.String(36), nullable=True)
     name = db.Column(db.String(255), nullable=False)
     model_type = db.Column(
         db.String(100), nullable=False
@@ -106,7 +106,7 @@ class Model(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
-            "user_id": self.user_id,
+            "owner_id": self.owner_id,
             "dataset_id": self.dataset_id,
             "project_id": self.project_id,
             "name": self.name,
@@ -124,7 +124,7 @@ class TrainingJob(db.Model):
     __tablename__ = "training_jobs"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False)
+    owner_id = db.Column(db.String(36), nullable=False, index=True)
     model_id = db.Column(db.String(36), db.ForeignKey("models.id"), nullable=False)
     status = db.Column(
         db.String(50), default="pending"
@@ -148,7 +148,7 @@ class TrainingJob(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
-            "user_id": self.user_id,
+            "owner_id": self.owner_id,
             "model_id": self.model_id,
             "status": self.status,
             "progress": self.progress,
@@ -166,7 +166,7 @@ class ModelComparison(db.Model):
     __tablename__ = "model_comparisons"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False)
+    owner_id = db.Column(db.String(36), nullable=False, index=True)
     name = db.Column(db.String(255), nullable=False)
     model_ids = db.Column(db.JSON)  # Array of model IDs
     comparison_metrics = db.Column(db.JSON)
@@ -175,7 +175,7 @@ class ModelComparison(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
-            "user_id": self.user_id,
+            "owner_id": self.owner_id,
             "name": self.name,
             "model_ids": self.model_ids,
             "comparison_metrics": self.comparison_metrics,

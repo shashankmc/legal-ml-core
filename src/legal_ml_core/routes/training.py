@@ -14,7 +14,7 @@ training_bp = Blueprint("training", __name__)
 @jwt_required()
 def start_training():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json()
 
         if "model_id" not in data:
@@ -23,7 +23,7 @@ def start_training():
         model_id = data["model_id"]
 
         # Get model and verify ownership
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
@@ -45,7 +45,7 @@ def start_training():
             return jsonify({"error": compat_error}), 400
 
         # Create training job
-        training_job = TrainingJob(user_id=user_id, model_id=model_id, status="pending")
+        training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
 
         db.session.add(training_job)
 
@@ -91,8 +91,8 @@ def start_training():
 @jwt_required()
 def get_training_status(job_id):
     try:
-        user_id = get_jwt_identity()
-        job = TrainingJob.query.filter_by(id=job_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        job = TrainingJob.query.filter_by(id=job_id, owner_id=owner_id).first()
 
         if not job:
             return jsonify({"error": "Training job not found"}), 404
@@ -140,8 +140,8 @@ def get_training_metrics(job_id):
     see legal_ml_core.compute.tasks.MetricLogger.
     """
     try:
-        user_id = get_jwt_identity()
-        job = TrainingJob.query.filter_by(id=job_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        job = TrainingJob.query.filter_by(id=job_id, owner_id=owner_id).first()
 
         if not job:
             return jsonify({"error": "Training job not found"}), 404
@@ -167,10 +167,10 @@ def get_training_metrics(job_id):
 @jwt_required()
 def get_training_jobs():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         model_id = request.args.get("model_id")
 
-        query = TrainingJob.query.filter_by(user_id=user_id)
+        query = TrainingJob.query.filter_by(owner_id=owner_id)
         if model_id:
             query = query.filter_by(model_id=model_id)
 
@@ -186,8 +186,8 @@ def get_training_jobs():
 @jwt_required()
 def stop_training(job_id):
     try:
-        user_id = get_jwt_identity()
-        job = TrainingJob.query.filter_by(id=job_id, user_id=user_id).first()
+        owner_id = get_jwt_identity()
+        job = TrainingJob.query.filter_by(id=job_id, owner_id=owner_id).first()
 
         if not job:
             return jsonify({"error": "Training job not found"}), 404
@@ -216,7 +216,7 @@ def stop_training(job_id):
 @jwt_required()
 def predict():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json()
 
         if "model_id" not in data or "text" not in data:
@@ -226,7 +226,7 @@ def predict():
         text = data["text"]
 
         # Get model and verify ownership
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
@@ -234,7 +234,7 @@ def predict():
             return jsonify({"error": "Model is not ready for prediction"}), 400
 
         # Add prediction task to queue
-        prediction_data = {"model_id": model_id, "text": text, "user_id": user_id}
+        prediction_data = {"model_id": model_id, "text": text, "owner_id": owner_id}
 
         prediction_id = str(uuid.uuid4())
         redis_client = current_app.redis_client
@@ -259,7 +259,7 @@ def predict():
 @jwt_required()
 def get_prediction(prediction_id):
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
 
         # Get prediction result from Redis
         result_key = f"prediction_result_{prediction_id}"
@@ -271,7 +271,7 @@ def get_prediction(prediction_id):
         result_data = json.loads(result)
 
         # Verify user ownership
-        if result_data.get("user_id") != user_id:
+        if result_data.get("owner_id") != owner_id:
             return jsonify({"error": "Unauthorized"}), 403
 
         return jsonify({"prediction": result_data}), 200
@@ -284,7 +284,7 @@ def get_prediction(prediction_id):
 @jwt_required()
 def batch_predict():
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
         data = request.get_json()
 
         if "model_id" not in data or "texts" not in data:
@@ -303,7 +303,7 @@ def batch_predict():
             )
 
         # Get model and verify ownership
-        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
@@ -314,7 +314,7 @@ def batch_predict():
         batch_prediction_data = {
             "model_id": model_id,
             "texts": texts,
-            "user_id": user_id,
+            "owner_id": owner_id,
         }
 
         batch_id = str(uuid.uuid4())
@@ -340,7 +340,7 @@ def batch_predict():
 @jwt_required()
 def get_batch_prediction(batch_id):
     try:
-        user_id = get_jwt_identity()
+        owner_id = get_jwt_identity()
 
         # Get batch prediction result from Redis
         result_key = f"batch_prediction_result_{batch_id}"
@@ -352,7 +352,7 @@ def get_batch_prediction(batch_id):
         result_data = json.loads(result)
 
         # Verify user ownership
-        if result_data.get("user_id") != user_id:
+        if result_data.get("owner_id") != owner_id:
             return jsonify({"error": "Unauthorized"}), 403
 
         return jsonify({"batch_prediction": result_data}), 200
