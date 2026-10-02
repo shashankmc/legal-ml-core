@@ -1,6 +1,7 @@
 from .auth import (
     AuthError,
     authenticate_request,
+    auth_mode,
     current_user,
     get_jwt,
     get_jwt_identity,
@@ -29,6 +30,7 @@ from .worker import run_ml_worker
 __all__ = [
     "AuthError",
     "authenticate_request",
+    "auth_mode",
     "current_user",
     "db",
     "get_jwt",

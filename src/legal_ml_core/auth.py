@@ -110,18 +110,60 @@ def _bearer_token():
     return parts[1].strip()
 
 
+def auth_mode():
+    """Return the configured auth mode: ``"keycloak"`` (default) or ``"none"``."""
+    return (current_app.config.get("AUTH_MODE") or "keycloak").strip().lower()
+
+
+def _assert_no_auth_is_safe():
+    """Refuse to start in AUTH_MODE=none unless it has been explicitly allowed.
+
+    An unauthenticated ML API is a serious footgun: it exposes every endpoint,
+    including training and data access. We require the operator to set
+    ``LEGAL_ML_ALLOW_NO_AUTH=true`` as a deliberate acknowledgement, and we log
+    a loud warning. Raising here (at first request) rather than silently
+    degrading makes the failure impossible to miss.
+    """
+    if not current_app.config.get("LEGAL_ML_ALLOW_NO_AUTH"):
+        raise AuthError(
+            "AUTH_MODE='none' disables authentication but "
+            "LEGAL_ML_ALLOW_NO_AUTH is not set. Set it to 'true' to "
+            "acknowledge that the ML API will be unauthenticated.",
+            status_code=500,
+        )
+    if not current_app.config.get("_LEGAL_ML_NO_AUTH_WARNED"):
+        current_app.logger.warning(
+            "legal-ml-core is running with AUTH_MODE='none' — authentication "
+            "and per-owner scoping are disabled. Do not expose this deployment."
+        )
+        current_app.config["_LEGAL_ML_NO_AUTH_WARNED"] = True
+
+
 def authenticate_request():
     """Authenticate the request and resolve the owner (and optional user).
 
-    The owner id is produced by the configured ``OwnerRef`` strategy
-    (ownership.py). By default that is the Keycloak ``sub`` claim, so no local
-    user table is required. A host that still wants to JIT-provision a local row
-    can set ``IDENTITY_RESOLVER``; its result is exposed via ``current_user()``
-    and its id wins as the owner id only when the strategy is
-    ``HostModelOwnerRef`` (the host wires that, or leaves the default and just
-    uses the resolver for the user object).
+    In the default ``keycloak`` mode the bearer token is verified and the owner
+    id is produced by the configured ``OwnerRef`` strategy (ownership.py) —
+    the Keycloak ``sub`` by default, so no local user table is required. A host
+    that still wants to JIT-provision a local row can set ``IDENTITY_RESOLVER``;
+    its result is exposed via ``current_user()``.
+
+    In ``none`` mode (ML-only deployments) no token is required; the owner comes
+    from the (typically ``NoOwnerRef``) strategy and every request shares it.
     """
     from .ownership import owner_ref
+
+    if auth_mode() == "none":
+        _assert_no_auth_is_safe()
+        try:
+            owner_id = owner_ref().resolve_owner_id(None)
+        except ValueError as exc:
+            raise AuthError(str(exc))
+
+        g.current_user = None
+        g.jwt_payload = None
+        g.jwt_identity = owner_id
+        return None
 
     payload = verify_bearer_token(_bearer_token())
 

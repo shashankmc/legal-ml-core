@@ -127,6 +127,31 @@ def test_keycloak_sub_is_the_owner(monkeypatch, tmp_path):
         db.drop_all()
 
 
+def test_auth_none_requires_explicit_opt_in(monkeypatch, tmp_path):
+    """AUTH_MODE='none' refuses to serve until LEGAL_ML_ALLOW_NO_AUTH is set."""
+    app = _base_app(tmp_path)
+    app.config["AUTH_MODE"] = "none"
+    app.config["OWNER_REF"] = NoOwnerRef()
+    db.init_app(app)
+    init_ml_feature(app, fakeredis.FakeStrictRedis(decode_responses=True), app.config["MODEL_FOLDER"], db=db)
+    with app.app_context():
+        db.create_all()
+
+    client = app.test_client()
+    # No token, and the opt-in flag is absent -> refused.
+    resp = client.get("/api/datasets/")
+    assert resp.status_code == 500
+    assert "LEGAL_ML_ALLOW_NO_AUTH" in resp.get_json()["error"]
+
+    # With the explicit acknowledgement, requests succeed without a token.
+    app.config["LEGAL_ML_ALLOW_NO_AUTH"] = True
+    resp = client.get("/api/datasets/")
+    assert resp.status_code == 200
+
+    with app.app_context():
+        db.drop_all()
+
+
 def test_no_owner_ref_single_tenant(monkeypatch, tmp_path):
     """ML-only deployment: no users, one implicit owner, rows still scoped."""
     _install_oidc_stub(monkeypatch)
