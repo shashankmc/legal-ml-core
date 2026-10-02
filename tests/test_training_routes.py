@@ -111,3 +111,19 @@ def test_stop_training(client, auth_headers, app):
 
     resp = client.get(f"/api/training/status/{job_id}", headers=auth_headers)
     assert resp.get_json()["job"]["status"] == "cancelled"
+
+
+def test_status_merges_live_redis_progress(client, auth_headers, app, fake_redis):
+    """The UI stepper reads progress from Redis, since the DB row only reaches
+    100 at the very end."""
+    _, job_id = _make_model_and_job(app)
+    fake_redis.setex(
+        f"job_status_{job_id}",
+        3600,
+        json.dumps({"status": "running", "progress": 75}),
+    )
+    resp = client.get(f"/api/training/status/{job_id}", headers=auth_headers)
+    assert resp.status_code == 200
+    job = resp.get_json()["job"]
+    assert job["progress"] == 75
+    assert job["status"] == "running"

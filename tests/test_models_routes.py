@@ -122,3 +122,64 @@ def test_predict_returns_504_when_worker_never_responds(client, auth_headers, ap
         headers=auth_headers,
     )
     assert resp.status_code == 504
+
+
+def test_available_models_for_sparse_task_type(client, auth_headers):
+    """`ner` is a valid task with no trainable models yet — answer 200, not 400."""
+    resp = client.get("/api/models/available?task_type=ner", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.get_json()["models"] == {}
+
+
+def test_create_model_rejects_incompatible_model(client, auth_headers, app):
+    """A clustering model cannot be created on a classification dataset."""
+    dataset_id = _make_dataset(app)
+    resp = client.post(
+        "/api/models/",
+        json={
+            "name": "Wrong model",
+            "dataset_id": dataset_id,
+            "model_type": "kmeans",
+            "parameters": {},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "cannot be trained" in resp.get_json()["error"]
+
+
+def test_update_model_labels_persists_display_names(client, auth_headers, app):
+    with app.app_context():
+        dataset = Dataset(
+            user_id=TEST_USER_ID,
+            name="topics",
+            file_path="/tmp/topics.csv",
+            row_count=10,
+            columns=[],
+            task_type="topic_modeling",
+        )
+        db.session.add(dataset)
+        db.session.commit()
+        dataset_id = dataset.id
+
+    create = client.post(
+        "/api/models/",
+        json={
+            "name": "Topic model",
+            "dataset_id": dataset_id,
+            "model_type": "lda",
+            "parameters": {},
+        },
+        headers=auth_headers,
+    )
+    model_id = create.get_json()["model"]["id"]
+
+    resp = client.put(
+        f"/api/models/{model_id}/labels",
+        json={"topics": {"0": "Contracts", "1": ""}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    display = resp.get_json()["model"]["metrics"]["display_labels"]
+    assert display["topics"]["0"] == "Contracts"
+    assert "1" not in display["topics"]

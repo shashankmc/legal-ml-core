@@ -88,7 +88,11 @@ def process_training_task(task_info, redis_client, model_storage_path):
             metrics = trainer.train_transformer_model(
                 texts, labels, task_info["model_type"], task_params
             )
-        elif task_info["task_type"] in ["classification", "document_classification"]:
+        elif task_info["task_type"] in [
+            "classification",
+            "document_classification",
+            "judgment_prediction",
+        ]:
             metrics = trainer.train_classification_model(
                 texts, labels, task_info["model_type"], task_info
             )
@@ -165,6 +169,9 @@ def process_training_task(task_info, redis_client, model_storage_path):
             from datetime import datetime
 
             job.status = "failed"
+            # Persist the reason so the UI can explain the failure instead of
+            # showing a generic "Training failed".
+            job.error_message = str(e)
             job.completed_at = datetime.utcnow()
         db.session.commit()
 

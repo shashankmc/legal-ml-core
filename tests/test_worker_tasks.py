@@ -170,3 +170,48 @@ def test_process_prediction_task_uses_saved_model(app, tmp_path):
 class _NullRedis:
     def setex(self, *a, **k):
         pass
+
+
+def test_failed_training_persists_error_message(app, fake_redis):
+    """A failure reason must reach the DB so the UI can explain it."""
+    with app.app_context():
+        dataset = Dataset(
+            user_id=TEST_USER_ID,
+            name="D1",
+            file_path="/tmp/d1.csv",
+            row_count=10,
+            columns=[],
+            task_type="classification",
+        )
+        db.session.add(dataset)
+        db.session.flush()
+        model = Model(
+            user_id=TEST_USER_ID,
+            dataset_id=dataset.id,
+            name="M1",
+            model_type="naive_bayes",
+            parameters={},
+            status="training",
+        )
+        db.session.add(model)
+        db.session.flush()
+        job = TrainingJob(user_id=TEST_USER_ID, model_id=model.id, status="pending")
+        db.session.add(job)
+        db.session.commit()
+        job_id = job.id
+
+        task_info = {
+            "job_id": job_id,
+            "model_id": model.id,
+            "dataset_id": dataset.id,
+            "model_type": "naive_bayes",
+            "parameters": {},
+            "dataset_path": "/nonexistent/path.csv",
+            "task_type": "classification",
+            "preprocessing_options": {},
+        }
+        process_training_task(task_info, fake_redis, app.config["MODEL_FOLDER"])
+
+        saved = TrainingJob.query.get(job_id)
+        assert saved.status == "failed"
+        assert saved.error_message

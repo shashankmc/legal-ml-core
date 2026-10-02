@@ -395,6 +395,55 @@ AVAILABLE_MODELS = {
 }
 
 
+# Dataset task types whose training is not implemented in the worker yet. Kept
+# explicit so uploads/selection can explain the limitation instead of failing
+# silently at training time.
+UNSUPPORTED_TASK_TYPES = {"ner", "named_entity_recognition", "summarization"}
+
+# Which model categories each dataset task type may use. Transformer models
+# (LegalBERT/RoBERTa) are supervised text classifiers, so they are offered for
+# every supervised text task.
+_TASK_CATEGORIES = {
+    "classification": ["classification", "transformer"],
+    "document_classification": ["classification", "transformer"],
+    "judgment_prediction": ["classification", "transformer"],
+    "topic_modeling": ["topic_modeling", "clustering"],
+    "clustering": ["clustering", "topic_modeling"],
+}
+
+
+def model_category_for(model_type):
+    for category, models in AVAILABLE_MODELS.items():
+        if model_type in models:
+            return category
+    return None
+
+
+def compatible_models_for_task(task_type):
+    """Return {model_type: config} of models that can train this task type."""
+    categories = _TASK_CATEGORIES.get(task_type, [])
+    result = {}
+    for category in categories:
+        result.update(AVAILABLE_MODELS.get(category, {}))
+    return result
+
+
+def validate_model_task_compatibility(model_type, task_type):
+    """Return (ok, error_message). Explains *why* a pairing is invalid."""
+    if task_type in UNSUPPORTED_TASK_TYPES or task_type not in _TASK_CATEGORIES:
+        return False, (
+            f"Training is not yet supported for '{task_type}' datasets. "
+            "Choose a classification, clustering or topic-modelling dataset."
+        )
+    allowed = compatible_models_for_task(task_type)
+    if model_type not in allowed:
+        return False, (
+            f"'{model_type}' cannot be trained on a '{task_type}' dataset. "
+            f"Compatible models: {', '.join(sorted(allowed))}."
+        )
+    return True, None
+
+
 @models_bp.route("/available", methods=["GET"])
 @jwt_required()
 def get_available_models():
@@ -402,10 +451,26 @@ def get_available_models():
         task_type = request.args.get("task_type")
 
         if task_type:
-            if task_type in AVAILABLE_MODELS:
+            if task_type in UNSUPPORTED_TASK_TYPES:
+                # A valid task with no trainable models yet — answer clearly
+                # rather than 400 ("Invalid task type").
+                return (
+                    jsonify(
+                        {
+                            "models": {},
+                            "message": (
+                                f"Training for '{task_type}' datasets is not available yet."
+                            ),
+                        }
+                    ),
+                    200,
+                )
+            if task_type in AVAILABLE_MODELS and task_type not in _TASK_CATEGORIES:
+                # Backwards-compatible: category name used directly.
                 return jsonify({"models": AVAILABLE_MODELS[task_type]}), 200
-            else:
-                return jsonify({"error": "Invalid task type"}), 400
+            if task_type in _TASK_CATEGORIES:
+                return jsonify({"models": compatible_models_for_task(task_type)}), 200
+            return jsonify({"error": "Invalid task type"}), 400
         else:
             return jsonify({"models": AVAILABLE_MODELS}), 200
 
@@ -480,6 +545,14 @@ def create_model():
 
         if not model_category:
             return jsonify({"error": "Invalid model type"}), 400
+
+        # Reject incompatible dataset/model pairings at creation time, with an
+        # explanation, rather than failing later during training.
+        ok, compat_error = validate_model_task_compatibility(
+            model_type, dataset.task_type
+        )
+        if not ok:
+            return jsonify({"error": compat_error}), 400
 
         # Validate parameters
         if model_type in AVAILABLE_MODELS.get(model_category, {}):
@@ -592,6 +665,48 @@ def update_model(model_id):
             ),
             200,
         )
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@models_bp.route("/<model_id>/labels", methods=["PUT"])
+@jwt_required()
+def update_model_labels(model_id):
+    """Persist human-readable names for unsupervised topics/clusters.
+
+    Stored under `metrics.display_labels` so no schema change is needed; a
+    label map for a topic/cluster id overrides the numeric "Topic 3"/"Cluster 2"
+    presentation in the UI.
+    """
+    try:
+        user_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, user_id=user_id).first()
+        if not model:
+            return jsonify({"error": "Model not found"}), 404
+
+        data = request.get_json() or {}
+        metrics = dict(model.metrics or {})
+        display = dict(metrics.get("display_labels") or {})
+
+        for key in ("topics", "clusters"):
+            incoming = data.get(key)
+            if isinstance(incoming, dict):
+                merged = dict(display.get(key) or {})
+                for label_id, name in incoming.items():
+                    name = str(name).strip()
+                    if name:
+                        merged[str(label_id)] = name
+                    else:
+                        merged.pop(str(label_id), None)
+                display[key] = merged
+
+        metrics["display_labels"] = display
+        model.metrics = metrics
+        db.session.commit()
+
+        return jsonify({"message": "Labels updated", "model": model.to_dict()}), 200
 
     except Exception as e:
         db.session.rollback()
@@ -956,6 +1071,13 @@ def train_model(model_id):
         dataset = Dataset.query.get(model.dataset_id)
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
+
+        # Fail fast, with a reason, if this model cannot train on this dataset.
+        ok, compat_error = validate_model_task_compatibility(
+            model.model_type, dataset.task_type
+        )
+        if not ok:
+            return jsonify({"error": compat_error}), 400
 
         # Create training job
         training_job = TrainingJob(user_id=user_id, model_id=model_id, status="pending")

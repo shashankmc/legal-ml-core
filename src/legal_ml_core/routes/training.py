@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from ..auth import jwt_required, get_jwt_identity
 from ..db import db
 from ..models import Model, Dataset, TrainingJob, TrainingMetricPoint
+from .models import validate_model_task_compatibility
 import json
 import uuid
 from datetime import datetime
@@ -34,6 +35,14 @@ def start_training():
         dataset = Dataset.query.get(model.dataset_id)
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
+
+        # Reject incompatible model/dataset pairings with an explanation before
+        # queueing a job that would otherwise fail silently.
+        ok, compat_error = validate_model_task_compatibility(
+            model.model_type, dataset.task_type
+        )
+        if not ok:
+            return jsonify({"error": compat_error}), 400
 
         # Create training job
         training_job = TrainingJob(user_id=user_id, model_id=model_id, status="pending")
@@ -88,10 +97,28 @@ def get_training_status(job_id):
         if not job:
             return jsonify({"error": "Training job not found"}), 404
 
+        job_payload = job.to_dict()
+        # The worker only writes fine-grained progress to Redis (the DB row's
+        # progress is set to 100 once, at the end). Merge the live value so the
+        # UI stepper actually advances while training runs.
+        try:
+            raw = current_app.redis_client.get(f"job_status_{job_id}")
+            if raw:
+                live = json.loads(raw)
+                if live.get("status"):
+                    job_payload["status"] = live["status"]
+                if live.get("progress") is not None:
+                    job_payload["progress"] = live["progress"]
+                if live.get("error"):
+                    job_payload["error_message"] = live["error"]
+        except Exception:
+            # Live status is best-effort; the DB row still answers the request.
+            pass
+
         return (
             jsonify(
                 {
-                    "job": job.to_dict(),
+                    "job": job_payload,
                     "model": job.model.to_dict() if job.model else None,
                 }
             ),
