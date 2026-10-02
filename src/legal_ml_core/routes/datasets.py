@@ -13,6 +13,125 @@ datasets_bp = Blueprint("datasets", __name__)
 ALLOWED_EXTENSIONS = {"csv", "xlsx", "json"}
 MAX_ROWS = 10000
 
+# Single source of truth for upload task types. The frontend renders this
+# catalogue (via GET /datasets/task-types) so its task guidance cannot drift
+# from what the backend actually accepts and validates.
+TASK_TYPES = [
+    {
+        "value": "classification",
+        "label": "Text Classification",
+        "summary": "Give each short piece of text one label.",
+        "when_to_use": (
+            "Use when every row is a passage (a clause, sentence or paragraph) "
+            "and you want one category for it, e.g. deontic type or sentiment."
+        ),
+        "label_meaning": (
+            "The single category you want predicted for the text (e.g. "
+            "Obligation, Permission, Prohibition)."
+        ),
+        "required_columns": ["text", "label"],
+        "example": 'text="Member States shall adopt these laws", label="Obligation"',
+    },
+    {
+        "value": "document_classification",
+        "label": "Document Classification",
+        "summary": "Give each whole document one label.",
+        "when_to_use": (
+            "Same mechanics as Text Classification, but each row is an entire "
+            "document (a full ruling, contract or judgment) rather than a "
+            "passage."
+        ),
+        "label_meaning": (
+            "The single category for the whole document (e.g. case outcome or "
+            "subject area)."
+        ),
+        "required_columns": ["text", "label"],
+        "example": 'text="<full court ruling>", label="criminal"',
+    },
+    {
+        "value": "ner",
+        "label": "Named Entity Recognition",
+        "summary": "Find and label spans of text (people, organisations, dates).",
+        "when_to_use": (
+            "Use when you need to locate specific spans inside the text — not "
+            "one label for the whole text. This is the main difference from "
+            "classification: the output marks entities, not the row."
+        ),
+        "label_meaning": (
+            "Entity types per span (e.g. PERSON, ORG, DATE), stored in the "
+            "'entities' column."
+        ),
+        "required_columns": ["text", "entities"],
+        "example": 'text="John Smith v. ABC Corp", entities="PERSON, ORG"',
+    },
+    {
+        "value": "named_entity_recognition",
+        "label": "Named Entity Recognition (Alt)",
+        "summary": "Alias of Named Entity Recognition for imported datasets.",
+        "when_to_use": (
+            "Identical to Named Entity Recognition; choose it only if your "
+            "existing data uses this task name."
+        ),
+        "label_meaning": "Same as Named Entity Recognition.",
+        "required_columns": ["text", "entities"],
+        "example": 'text="Legal case text", entities="PERSON, ORG, DATE"',
+    },
+    {
+        "value": "summarization",
+        "label": "Text Summarization",
+        "summary": "Produce a short summary from a longer text.",
+        "when_to_use": (
+            "Use when you have long documents and the matching short summary "
+            "you want the model to learn to produce."
+        ),
+        "label_meaning": "The target summary text, stored in the 'summary' column.",
+        "required_columns": ["text", "summary"],
+        "example": 'text="<long legal document>", summary="<brief summary>"',
+    },
+    {
+        "value": "topic_modeling",
+        "label": "Topic Modeling",
+        "summary": "Discover recurring themes; no labels needed.",
+        "when_to_use": (
+            "Unsupervised: use when you have text but no labels and want to "
+            "discover themes. You can name the topics after training."
+        ),
+        "label_meaning": "None — unsupervised, so there is no label column.",
+        "required_columns": ["text"],
+        "example": 'text="<legal document content>"',
+    },
+    {
+        "value": "clustering",
+        "label": "Document Clustering",
+        "summary": "Group similar documents; no labels needed.",
+        "when_to_use": (
+            "Unsupervised: use when you want documents grouped by similarity "
+            "rather than by theme keywords. You can name the clusters after "
+            "training."
+        ),
+        "label_meaning": "None — unsupervised, so there is no label column.",
+        "required_columns": ["text"],
+        "example": 'text="<document content>"',
+    },
+    {
+        "value": "judgment_prediction",
+        "label": "Judgment Prediction",
+        "summary": "Predict a case outcome from the facts.",
+        "when_to_use": (
+            "Use when each row is a case's facts and you want to predict the "
+            "outcome."
+        ),
+        "label_meaning": (
+            "The case outcome to predict (e.g. guilty / not_guilty), stored in "
+            "the 'judgment' column."
+        ),
+        "required_columns": ["text", "judgment"],
+        "example": 'text="<case facts>", judgment="guilty"',
+    },
+]
+
+VALID_TASK_TYPES = [t["value"] for t in TASK_TYPES]
+
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -200,21 +319,11 @@ def upload_dataset():
                 ]
 
         # Validate task type
-        valid_task_types = [
-            "classification",
-            "document_classification",
-            "ner",
-            "named_entity_recognition",
-            "summarization",
-            "topic_modeling",
-            "clustering",
-            "judgment_prediction",
-        ]
-        if task_type not in valid_task_types:
+        if task_type not in VALID_TASK_TYPES:
             return (
                 jsonify(
                     {
-                        "error": f'Invalid task type. Valid types: {", ".join(valid_task_types)}'
+                        "error": f'Invalid task type. Valid types: {", ".join(VALID_TASK_TYPES)}'
                     }
                 ),
                 400,
@@ -275,6 +384,17 @@ def upload_dataset():
         if "file_path" in locals() and os.path.exists(file_path):
             os.remove(file_path)  # Clean up file
         return jsonify({"error": str(e)}), 500
+
+
+@datasets_bp.route("/task-types", methods=["GET"])
+def get_task_types():
+    """Return the upload task-type catalogue (single source of truth).
+
+    Unauthenticated on purpose: it is static guidance used to render the upload
+    form, so it can be fetched before the user is signed in. The frontend must
+    not hard-code this list.
+    """
+    return jsonify({"task_types": TASK_TYPES}), 200
 
 
 @datasets_bp.route("/<dataset_id>/preview", methods=["GET"])
