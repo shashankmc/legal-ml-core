@@ -719,15 +719,9 @@ def generate_visualizations(df, task_type):
                 df, numeric_cols
             )
 
-    # Categorical visualizations — exclude free-text columns
-    categorical_cols = [
-        col for col in df.select_dtypes(include=["object"]).columns
-        if _is_categorical(df[col], len(df))
-    ]
-    if categorical_cols:
-        visualizations["categorical_distributions"] = create_categorical_distributions(
-            df, categorical_cols
-        )
+    # NOTE: the generic "Top 10 values" categorical chart was removed — it was
+    # meaningless for text-heavy legal datasets and added noise. The label
+    # distribution and distinctive-terms-per-class views cover that need.
 
     # Task-specific visualizations
     if task_type in ["classification", "document_classification"]:
@@ -823,30 +817,6 @@ def create_correlation_heatmap(df, numeric_cols):
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 
-def create_categorical_distributions(df, categorical_cols):
-    """Create distributions for categorical columns"""
-    if len(categorical_cols) == 0:
-        return None
-
-    # Limit to first 4 columns for performance
-    cols_to_plot = categorical_cols[:4]
-
-    fig = go.Figure()
-
-    for col in cols_to_plot:
-        value_counts = df[col].value_counts().head(10)  # Top 10 values
-        fig.add_trace(go.Bar(x=value_counts.index, y=value_counts.values, name=col))
-
-    fig.update_layout(
-        title="Categorical Columns Distributions (Top 10 values)",
-        xaxis_title="Values",
-        yaxis_title="Count",
-        height=400,
-    )
-
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
-
-
 def create_classification_visualizations(df):
     """Create classification-specific visualizations"""
     visualizations = {}
@@ -882,19 +852,33 @@ def create_classification_visualizations(df):
                 break
 
         if text_col:
-            # Text length by class
+            # Text length by class. Box plots encode the middle 50% as the box
+            # and the fences (1.5 x IQR) as the whiskers; text outside them is
+            # unusually long or short, so label it explicitly instead of leaving
+            # the fences undiscoverable.
             df["text_length"] = df[text_col].astype(str).str.len()
 
             fig = go.Figure()
 
             for label in df[label_col].unique():
                 label_data = df[df[label_col] == label]["text_length"]
-                fig.add_trace(go.Box(y=label_data, name=str(label)))
+                fig.add_trace(
+                    go.Box(
+                        y=label_data,
+                        name=str(label),
+                        boxpoints="outliers",
+                        hoveron="points+boxes",
+                    )
+                )
 
             fig.update_layout(
-                title="Text Length Distribution by Class",
+                title=(
+                    "Text Length Distribution by Class "
+                    "(box = middle 50% of texts; whiskers = 1.5×IQR; "
+                    "dots = unusually long/short texts)"
+                ),
                 xaxis_title="Class",
-                yaxis_title="Text Length",
+                yaxis_title="Text length (characters)",
                 height=400,
             )
 
