@@ -9,10 +9,11 @@ from .auth import (
     verify_bearer_token,
 )
 from .blueprint import init_ml_feature
-from .db import db
+from .db import MLBase, db, get_db, set_active_db
 from .models import (
     AnnotationTask,
     Dataset,
+    MLProject,
     Model,
     ModelComparison,
     TrainingJob,
@@ -33,6 +34,9 @@ __all__ = [
     "auth_mode",
     "current_user",
     "db",
+    "MLBase",
+    "get_db",
+    "set_active_db",
     "get_jwt",
     "get_jwt_identity",
     "init_ml_feature",

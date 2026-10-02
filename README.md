@@ -28,17 +28,38 @@ code-execution/package-installation queues).
 
 ## Installing into a host Flask app
 
+A host that has its own models owns the `SQLAlchemy` handle, built on this
+package's shared `MLBase`:
+
 ```python
 from flask import Flask
-from legal_ml_core import db, init_ml_feature
+from flask_sqlalchemy import SQLAlchemy
+from legal_ml_core import MLBase, init_ml_feature
 import redis
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://..."
-db.init_app(app)  # `db` is this package's SQLAlchemy() instance — see below
+
+db = SQLAlchemy(model_class=MLBase)   # host owns the handle, on the shared base
+db.init_app(app)
+
+# Host models subclass MLBase too, so they share one registry with the package:
+#   from legal_ml_core import MLBase
+#   class Project(MLBase): ...
 
 redis_client = redis.Redis.from_url("redis://...")
 init_ml_feature(app, redis_client, model_storage_path="/app/models", db=db)
+```
+
+An **ML-only host** with no models of its own can skip the handle and let the
+package use its default one (pass `db=None`, or just call
+`from legal_ml_core import db; db.init_app(app)` — `db` is a proxy onto the
+package's default handle):
+
+```python
+from legal_ml_core import db, init_ml_feature
+db.init_app(app)
+init_ml_feature(app, redis_client, model_storage_path="/app/models")  # db omitted
 ```
 
 **Ownership is pluggable and needs no local user table.** ML rows carry an
@@ -52,21 +73,28 @@ app.config["OWNER_REF"] = KeycloakOwnerRef()          # default; sub is the owne
 # or: NoOwnerRef()                                            # single-tenant, no auth
 ```
 
-Projects are optional: without a host `PROJECT_VALIDATOR` callable, a non-empty
-`project_id` is treated as an opaque reference the host owns.
+Projects are optional, selected by `PROJECT_SCOPE`:
+
+- `"none"` (default) — a non-empty `project_id` is an opaque reference the host
+  owns; the package never validates it.
+- `"host_table"` — the host installs a `PROJECT_VALIDATOR(session, project_id,
+  owner_id) -> bool` callable (BAIGLE's path; it has its own `projects` table).
+- `"package_table"` — the package validates against its own optional
+  `ml_projects` table (`MLProject`), for a self-contained host that wants
+  grouping without bringing a model.
 
 > The earlier hard foreign keys into `users`/`projects` (and the stub tables the
 > worker used to fabricate) were removed in the reusability refactor; see
 > `docs/legal-ml-core-reusability-plan.md` in the BAIGLE repo.
 
-**Important**: if your host has its own models, they must subclass `db.Model`
-from *this* package (`from legal_ml_core import db`), not a
-separately-constructed `SQLAlchemy()` instance. Flask-SQLAlchemy's
-`model_class=` parameter does **not** let two independently-constructed
-declarative bases share one mapper registry — verified directly against
-Flask-SQLAlchemy 3.0.5. Sharing this package's own `db` instance is the only
-combination confirmed to work. (Increment 4 of the reusability plan inverts
-this so the host provides `db`; until then the package owns it.)
+**Registry sharing contract.** All models — the package's and the host's — must
+be attached to **one** declarative base: `legal_ml_core.db.MLBase`. Build your
+handle as `SQLAlchemy(model_class=MLBase)` and subclass `MLBase` for your own
+models; do **not** construct a second independent `SQLAlchemy()` on a different
+base — two such handles never share a registry. `init_ml_feature` enforces this
+by checking that the handle's metadata is `MLBase`'s. (Flask-SQLAlchemy derives
+its own base class from `model_class`, so `db.Model is not MLBase`; the thing
+that must match is the metadata, which is what the check compares.)
 
 ## Packaged into host images
 

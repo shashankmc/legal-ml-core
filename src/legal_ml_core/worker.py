@@ -21,7 +21,7 @@ import redis as redis_lib
 from flask import Flask
 
 from .compute.tasks import process_explanation_task, process_prediction_task, process_training_task
-from .db import db
+from .db import get_db, set_active_db
 
 
 def _build_worker_app(database_url):
@@ -30,8 +30,10 @@ def _build_worker_app(database_url):
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     # No host model definitions are needed: ownership is an opaque owner_id with
     # no foreign key into host tables (see ownership.py), so the package's models
-    # resolve on their own.
+    # resolve on their own. The worker uses the package's default handle.
+    db = get_db()
     db.init_app(app)
+    set_active_db(db)
     return app
 
 

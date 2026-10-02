@@ -1,10 +1,29 @@
 import uuid
 from datetime import datetime
 
-from .db import db
+from .db import MLBase, db
 
 
-class Dataset(db.Model):
+class MLProject(MLBase):
+    """Optional package-owned project grouping (increment 4, `ml_projects`).
+
+    Hosts that have their own project table do not use this — they plug a
+    ``PROJECT_VALIDATOR`` into the app config instead (see db_utils). This table
+    exists so a self-contained ML-only host gets project grouping without
+    bringing its own model. It is only consulted for reference validation when
+    ``PROJECT_SCOPE="package_table"``.
+    """
+
+    __tablename__ = "ml_projects"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id = db.Column(db.String(36), nullable=False, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class Dataset(MLBase):
     __tablename__ = "datasets"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -76,7 +95,7 @@ class Dataset(db.Model):
         }
 
 
-class Model(db.Model):
+class Model(MLBase):
     __tablename__ = "models"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -120,7 +139,7 @@ class Model(db.Model):
         }
 
 
-class TrainingJob(db.Model):
+class TrainingJob(MLBase):
     __tablename__ = "training_jobs"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -162,7 +181,7 @@ class TrainingJob(db.Model):
         }
 
 
-class ModelComparison(db.Model):
+class ModelComparison(MLBase):
     __tablename__ = "model_comparisons"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -183,7 +202,7 @@ class ModelComparison(db.Model):
         }
 
 
-class AnnotationTask(db.Model):
+class AnnotationTask(MLBase):
     __tablename__ = "annotation_tasks"
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -217,7 +236,7 @@ class AnnotationTask(db.Model):
         }
 
 
-class TrainingMetricPoint(db.Model):
+class TrainingMetricPoint(MLBase):
     """A single logged metric value during a training run.
 
     For the HuggingFace `Trainer` path (LegalBERT/RoBERTa) this is a genuine

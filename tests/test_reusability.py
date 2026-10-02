@@ -187,3 +187,32 @@ def test_no_owner_ref_single_tenant(monkeypatch, tmp_path):
 
     with app.app_context():
         db.drop_all()
+
+
+def test_package_table_project_scope(monkeypatch, tmp_path):
+    """PROJECT_SCOPE="package_table": ml_projects validates references."""
+    _install_oidc_stub(monkeypatch)
+    app = _base_app(tmp_path)
+    app.config["OWNER_REF"] = NoOwnerRef()
+    app.config["PROJECT_SCOPE"] = "package_table"
+    db.init_app(app)
+    init_ml_feature(
+        app, fakeredis.FakeStrictRedis(decode_responses=True),
+        app.config["MODEL_FOLDER"], db=db,
+    )
+
+    from legal_ml_core.db_utils import project_belongs_to_owner
+    from legal_ml_core import MLProject
+
+    with app.app_context():
+        db.create_all()
+        assert "ml_projects" in db.metadata.tables
+        p = MLProject(owner_id="owner-1", name="Alpha")
+        db.session.add(p)
+        db.session.commit()
+
+        assert project_belongs_to_owner(db.session, p.id, "owner-1") is True
+        assert project_belongs_to_owner(db.session, p.id, "owner-2") is False
+        assert project_belongs_to_owner(db.session, "no-such-id", "owner-1") is False
+        assert project_belongs_to_owner(db.session, "", "owner-1") is True
+        db.drop_all()
