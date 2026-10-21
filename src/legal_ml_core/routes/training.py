@@ -69,7 +69,7 @@ def start_training():
         }
 
         # Add task to Redis queue
-        current_app.redis_client.lpush("training_queue", json.dumps(task_data))
+        current_app.redis_client.lpush(current_app.config.get("LEGAL_ML_TRAINING_QUEUE", "training_queue"), json.dumps(task_data))
 
         return (
             jsonify(
@@ -242,7 +242,7 @@ def predict():
             f"prediction_{prediction_id}", 300, json.dumps(prediction_data)
         )  # 5 min TTL
         redis_client.lpush(
-            "prediction_queue",
+            current_app.config.get("LEGAL_ML_PREDICTION_QUEUE", "prediction_queue"),
             json.dumps({"prediction_id": prediction_id, **prediction_data}),
         )
 
@@ -323,7 +323,7 @@ def batch_predict():
             f"batch_prediction_{batch_id}", 1800, json.dumps(batch_prediction_data)
         )  # 30 min TTL
         redis_client.lpush(
-            "batch_prediction_queue",
+            current_app.config.get("LEGAL_ML_BATCH_PREDICTION_QUEUE", "batch_prediction_queue"),
             json.dumps({"batch_id": batch_id, **batch_prediction_data}),
         )
 

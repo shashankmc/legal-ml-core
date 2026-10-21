@@ -6,7 +6,7 @@ import pandas as pd
 
 from ..db import db
 from ..models import Model, TrainingJob, TrainingMetricPoint
-from ..storage import get_model_path, get_transformer_output_dir
+from ..storage import get_storage_backend
 from .explain import generate_lime_explanation, generate_shap_explanation
 from .trainer import MLModelTrainer
 
@@ -82,7 +82,7 @@ def process_training_task(task_info, redis_client, model_storage_path):
         # Train model based on task type
         if task_info["model_type"] in ["legalbert", "roberta"]:
             task_params = dict(task_info)
-            task_params["output_dir"] = get_transformer_output_dir(
+            task_params["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
             )
             metrics = trainer.train_transformer_model(
@@ -114,7 +114,7 @@ def process_training_task(task_info, redis_client, model_storage_path):
         metric_logger.log("training_done", 1.0)
 
         # Save model
-        model_path = get_model_path(model_storage_path, model_id)
+        model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
         trainer.save_model(model_path)
         metric_logger.log("model_saved", 1.0)
 
@@ -186,7 +186,7 @@ def process_prediction_task(task_info, model_storage_path):
 
     print(f"Processing prediction for model {model_id} ({len(texts)} samples)")
 
-    model_path = get_model_path(model_storage_path, model_id)
+    model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found at {model_path}")
 
@@ -297,7 +297,7 @@ def process_explanation_task(task_info, model_storage_path):
 
     print(f"Processing {method.upper()} explanation for model {model_id}")
 
-    model_path = get_model_path(model_storage_path, model_id)
+    model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
 

@@ -28,6 +28,9 @@ def _build_worker_app(database_url):
     app = Flask(__name__)
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    from .storage import LocalStorageBackend
+
+    app.config.setdefault("LEGAL_ML_STORAGE_BACKEND", LocalStorageBackend())
     # No host model definitions are needed: ownership is an opaque owner_id with
     # no foreign key into host tables (see ownership.py), so the package's models
     # resolve on their own. The worker uses the package's default handle.
@@ -53,10 +56,10 @@ def _connect_redis(redis_url, retries=None):
             time.sleep(3)
 
 
-def _training_loop(redis_client, model_storage_path, app):
+def _training_loop(redis_client, model_storage_path, app, training_queue="training_queue"):
     while True:
         try:
-            task_data = redis_client.brpop("training_queue", timeout=10)
+            task_data = redis_client.brpop(training_queue, timeout=10)
             if not task_data:
                 continue
             task_info = json.loads(task_data[1])
@@ -66,16 +69,17 @@ def _training_loop(redis_client, model_storage_path, app):
             print(f"Error in training loop: {str(e)}", flush=True)
 
 
-def _prediction_loop(redis_client, model_storage_path):
+def _prediction_loop(redis_client, model_storage_path, app, prediction_queue="prediction_queue"):
     while True:
         prediction_id = None
         try:
-            task_data = redis_client.brpop("prediction_queue", timeout=10)
+            task_data = redis_client.brpop(prediction_queue, timeout=10)
             if not task_data:
                 continue
             task_info = json.loads(task_data[1])
             prediction_id = task_info["prediction_id"]
-            result = process_prediction_task(task_info, model_storage_path)
+            with app.app_context():
+                result = process_prediction_task(task_info, model_storage_path)
             result_key = f"prediction_result_{prediction_id}"
             redis_client.lpush(result_key, json.dumps(result))
             redis_client.expire(result_key, 300)
@@ -88,16 +92,17 @@ def _prediction_loop(redis_client, model_storage_path):
                 redis_client.expire(result_key, 300)
 
 
-def _explanation_loop(redis_client, model_storage_path):
+def _explanation_loop(redis_client, model_storage_path, app, explanation_queue="explanation_queue"):
     while True:
         explanation_id = None
         try:
-            task_data = redis_client.brpop("explanation_queue", timeout=10)
+            task_data = redis_client.brpop(explanation_queue, timeout=10)
             if not task_data:
                 continue
             task_info = json.loads(task_data[1])
             explanation_id = task_info["explanation_id"]
-            result = process_explanation_task(task_info, model_storage_path)
+            with app.app_context():
+                result = process_explanation_task(task_info, model_storage_path)
             redis_client.setex(f"explanation_{explanation_id}", 3600, json.dumps(result))
             print(f"{result.get('method', '?').upper()} explanation generated for model {task_info.get('model_id')}", flush=True)
         except Exception as e:
@@ -110,7 +115,15 @@ def _explanation_loop(redis_client, model_storage_path):
                 )
 
 
-def run_ml_worker(redis_url, database_url, model_storage_path, block=True):
+def run_ml_worker(
+    redis_url,
+    database_url,
+    model_storage_path,
+    block=True,
+    training_queue="training_queue",
+    prediction_queue="prediction_queue",
+    explanation_queue="explanation_queue",
+):
     """Starts the training/prediction/explanation queue-consumer threads.
 
     Set `block=False` to start the threads and return immediately (e.g. when
@@ -121,9 +134,9 @@ def run_ml_worker(redis_url, database_url, model_storage_path, block=True):
     app = _build_worker_app(database_url)
 
     threads = [
-        threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app), daemon=True),
-        threading.Thread(target=_prediction_loop, args=(redis_client, model_storage_path), daemon=True),
-        threading.Thread(target=_explanation_loop, args=(redis_client, model_storage_path), daemon=True),
+        threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue), daemon=True),
+        threading.Thread(target=_prediction_loop, args=(redis_client, model_storage_path, app, prediction_queue), daemon=True),
+        threading.Thread(target=_explanation_loop, args=(redis_client, model_storage_path, app, explanation_queue), daemon=True),
     ]
     for t in threads:
         t.start()

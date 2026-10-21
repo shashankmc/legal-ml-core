@@ -35,6 +35,12 @@ def init_ml_feature(app, redis_client, model_storage_path, db=None):
     app.redis_client = redis_client
     app.config.setdefault("LEGAL_ML_MODEL_STORAGE_PATH", model_storage_path)
 
+    # Storage backend defaults to the local on-disk layout; hosts with object
+    # storage override LEGAL_ML_STORAGE_BACKEND before/after init.
+    from .storage import LocalStorageBackend
+
+    app.config.setdefault("LEGAL_ML_STORAGE_BACKEND", LocalStorageBackend())
+
     from .routes.annotation import annotation_bp
     from .routes.datasets import datasets_bp
     from .routes.eda import eda_bp

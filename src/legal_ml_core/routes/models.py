@@ -854,7 +854,7 @@ def explain_model(model_id):
             "owner_id": owner_id,
         }
 
-        current_app.redis_client.lpush("explanation_queue", json.dumps(task_data))
+        current_app.redis_client.lpush(current_app.config.get("LEGAL_ML_EXPLANATION_QUEUE", "explanation_queue"), json.dumps(task_data))
 
         return (
             jsonify(
@@ -970,7 +970,7 @@ def explain_model_batch(model_id):
                 "owner_id": owner_id,
             }
 
-            current_app.redis_client.lpush("explanation_queue", json.dumps(task_data))
+            current_app.redis_client.lpush(current_app.config.get("LEGAL_ML_EXPLANATION_QUEUE", "explanation_queue"), json.dumps(task_data))
 
         return (
             jsonify(
@@ -1030,7 +1030,7 @@ def predict(model_id):
         timeout = 120 if model.model_type in TRANSFORMER_MODELS else 30
 
         r = current_app.redis_client
-        r.lpush("prediction_queue", json.dumps(task))
+        r.lpush(current_app.config.get("LEGAL_ML_PREDICTION_QUEUE", "prediction_queue"), json.dumps(task))
 
         result_key = f"prediction_result_{prediction_id}"
         raw = r.blpop(result_key, timeout=timeout)
@@ -1105,7 +1105,7 @@ def train_model(model_id):
 
         # Try to add task to Redis queue if available
         try:
-            current_app.redis_client.lpush("training_queue", json.dumps(task_data))
+            current_app.redis_client.lpush(current_app.config.get("LEGAL_ML_TRAINING_QUEUE", "training_queue"), json.dumps(task_data))
         except Exception as redis_err:
             # Log Redis error but continue - we still have the job in database
             current_app.logger.warning(
