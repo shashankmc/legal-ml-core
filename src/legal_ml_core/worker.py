@@ -22,6 +22,7 @@ from flask import Flask
 
 from .compute.tasks import process_explanation_task, process_prediction_task, process_training_task
 from .db import get_db, set_active_db
+from .liveness import DEFAULT_TIMINGS, start_worker_liveness
 
 
 def _build_worker_app(database_url):
@@ -56,7 +57,9 @@ def _connect_redis(redis_url, retries=None):
             time.sleep(3)
 
 
-def _training_loop(redis_client, model_storage_path, app, training_queue="training_queue"):
+def _training_loop(
+    redis_client, model_storage_path, app, training_queue="training_queue", liveness=DEFAULT_TIMINGS
+):
     while True:
         try:
             task_data = redis_client.brpop(training_queue, timeout=10)
@@ -64,7 +67,9 @@ def _training_loop(redis_client, model_storage_path, app, training_queue="traini
                 continue
             task_info = json.loads(task_data[1])
             with app.app_context():
-                process_training_task(task_info, redis_client, model_storage_path)
+                process_training_task(
+                    task_info, redis_client, model_storage_path, liveness=liveness
+                )
         except Exception as e:
             print(f"Error in training loop: {str(e)}", flush=True)
 
@@ -123,23 +128,30 @@ def run_ml_worker(
     training_queue="training_queue",
     prediction_queue="prediction_queue",
     explanation_queue="explanation_queue",
+    liveness=DEFAULT_TIMINGS,
 ):
     """Starts the training/prediction/explanation queue-consumer threads.
 
     Set `block=False` to start the threads and return immediately (e.g. when
     the host app's own worker process wants to run this alongside its own
     unrelated queues in the same process).
+
+    `liveness` (LivenessTimings) sets the heartbeat interval (15s), the stale
+    window (120s) and the job-status TTL (3600s). The API's sweep reads its
+    stale window from `LEGAL_ML_HEARTBEAT_STALE_SECONDS`; keep the two equal.
     """
     redis_client = _connect_redis(redis_url)
     app = _build_worker_app(database_url)
 
     threads = [
-        threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue), daemon=True),
+        threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue, liveness), daemon=True),
         threading.Thread(target=_prediction_loop, args=(redis_client, model_storage_path, app, prediction_queue), daemon=True),
         threading.Thread(target=_explanation_loop, args=(redis_client, model_storage_path, app, explanation_queue), daemon=True),
     ]
     for t in threads:
         t.start()
+    # D12: lets the API tell queued jobs that no worker is running.
+    start_worker_liveness(redis_client, liveness)
 
     print("legal_ml_core worker running (training_queue, prediction_queue, explanation_queue)", flush=True)
 

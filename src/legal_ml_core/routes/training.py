@@ -2,7 +2,15 @@ from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from ..db import db
 from ..models import Model, Dataset, TrainingJob, TrainingMetricPoint
-from ..queue_contract import JOB_CANCEL_TTL_SECONDS, job_cancel_key
+from ..job_state import (
+    DEFAULT_STALE_SECONDS,
+    TERMINAL_JOB_STATUSES,
+    sweep_stale_job,
+    transition,
+    waiting_message,
+    worker_is_alive,
+)
+from ..queue_contract import JOB_CANCEL_TTL_SECONDS, job_cancel_key, job_status_key
 from .models import validate_model_task_compatibility
 import json
 import uuid
@@ -10,7 +18,29 @@ from datetime import datetime
 
 training_bp = Blueprint("training", __name__)
 
-TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled")
+
+
+def _stale_after():
+    return current_app.config.get("LEGAL_ML_HEARTBEAT_STALE_SECONDS", DEFAULT_STALE_SECONDS)
+
+
+def _liveness_view(jobs):
+    """R5/D12 on read: sweep dead running jobs to failed, then return
+    {job_id: waiting message} for queued jobs when no worker is alive."""
+    redis_client = current_app.redis_client
+    stale_after = _stale_after()
+    for job in jobs:
+        sweep_stale_job(job, redis_client, stale_after)
+    if not any(job.status == "pending" for job in jobs):
+        return {}
+    alive = worker_is_alive(redis_client, stale_after)
+    return {job.id: waiting_message(job, alive) for job in jobs}
+
+
+def _job_dict(job, messages):
+    payload = job.to_dict()
+    payload["status_message"] = messages.get(job.id)
+    return payload
 
 
 @training_bp.route("/start", methods=["POST"])
@@ -100,7 +130,7 @@ def get_training_status(job_id):
         if not job:
             return jsonify({"error": "Training job not found"}), 404
 
-        job_payload = job.to_dict()
+        job_payload = _job_dict(job, _liveness_view([job]))
         # The worker only writes fine-grained progress to Redis (the DB row's
         # progress is set to 100 once, at the end). Merge the live value so the
         # UI stepper actually advances while training runs.
@@ -112,7 +142,7 @@ def get_training_status(job_id):
             raw = (
                 None
                 if job.status in TERMINAL_JOB_STATUSES
-                else current_app.redis_client.get(f"job_status_{job_id}")
+                else current_app.redis_client.get(job_status_key(job_id))
             )
             if raw:
                 live = json.loads(raw)
@@ -187,7 +217,8 @@ def get_training_jobs():
 
         jobs = query.order_by(TrainingJob.created_at.desc()).limit(50).all()
 
-        return jsonify({"jobs": [job.to_dict() for job in jobs]}), 200
+        messages = _liveness_view(jobs)
+        return jsonify({"jobs": [_job_dict(job, messages) for job in jobs]}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -208,20 +239,15 @@ def stop_training(job_id):
 
         # Guarded write: if the worker's final write landed between the check
         # above and here, the job stays completed and Stop is rejected.
-        stopped = TrainingJob.query.filter(
-            TrainingJob.id == job_id, TrainingJob.status.in_(["pending", "running"])
-        ).update(
-            {"status": "cancelled", "completed_at": datetime.utcnow()},
-            synchronize_session=False,
-        )
-        if not stopped:
-            db.session.rollback()
+        if not transition(
+            job_id,
+            ("pending", "running"),
+            "cancelled",
+            model_status="failed",
+            reason="stop requested",
+            completed_at=datetime.utcnow(),
+        ):
             return jsonify({"error": "Training job is not active"}), 400
-
-        if job.model:
-            job.model.status = "failed"
-
-        db.session.commit()
 
         # Cooperative cancel (D4/OV-E4): the worker polls this flag at pickup,
         # between stages, and inside HF training.

@@ -6,8 +6,10 @@ import joblib
 import pandas as pd
 
 from ..db import db
+from ..job_state import ACTIVE_JOB_STATUSES, transition
 from ..models import Model, TrainingJob, TrainingMetricPoint
-from ..queue_contract import is_cancel_requested
+from ..liveness import DEFAULT_TIMINGS, Heartbeat
+from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
 from .explain import generate_lime_explanation, generate_shap_explanation
 from .trainer import MLModelTrainer, TrainingCancelled
@@ -43,23 +45,11 @@ class MetricLogger:
         return step
 
 
-ACTIVE_JOB_STATUSES = ("pending", "running")
-
-
-def _guarded_job_update(job_id, from_statuses, **values):
-    """UPDATE training_jobs SET ... WHERE id=? AND status IN from_statuses.
-
-    Returns True when the row was still in one of `from_statuses` and was
-    updated. Terminal states (completed/failed/cancelled) are never in
-    `from_statuses`, so a guarded write can never overwrite them.
-    """
-    updated = (
-        TrainingJob.query.filter(
-            TrainingJob.id == job_id, TrainingJob.status.in_(from_statuses)
-        ).update(values, synchronize_session=False)
-    )
-    db.session.commit()
-    return updated == 1
+def _guarded_job_update(job_id, from_statuses, status, **values):
+    """Guarded, logged status write (see job_state.transition): returns False
+    when the job already left `from_statuses`, e.g. cancelled by /stop or
+    failed by the stale sweep."""
+    return transition(job_id, from_statuses, status, **values)
 
 
 def _mark_running(job_id, model_id):
@@ -85,11 +75,18 @@ def _mark_cancelled(job_id, redis_client):
         if job and job.model:
             job.model.status = "failed"  # same as /stop
             db.session.commit()
-    redis_client.setex(f"job_status_{job_id}", 3600, json.dumps({"status": "cancelled"}))
+    redis_client.setex(
+        job_status_key(job_id), JOB_STATUS_TTL_SECONDS, json.dumps({"status": "cancelled"})
+    )
 
 
 def process_training_task(
-    task_info, redis_client, model_storage_path, trainer_factory=MLModelTrainer
+    task_info,
+    redis_client,
+    model_storage_path,
+    trainer_factory=MLModelTrainer,
+    liveness=DEFAULT_TIMINGS,
+    heartbeat_factory=Heartbeat,
 ):
     """Runs one training task. Must be called with a Flask app context pushed
     (db.session/Model.query need it) — see legal_ml_core.worker.run_ml_worker.
@@ -98,6 +95,10 @@ def process_training_task(
     against the `models`/`training_jobs` tables with normal SQLAlchemy writes
     through the same ORM classes the API process uses — the two processes now
     share one schema representation instead of two independent ones.
+
+    While the job runs, a heartbeat thread (`heartbeat_factory`, see
+    liveness.py) beats every `liveness.heartbeat_interval` seconds; if this
+    process dies, the beats stop and the API sweep marks the job failed (R5).
     """
     job_id = task_info["job_id"]
     model_id = task_info["model_id"]
@@ -109,16 +110,19 @@ def process_training_task(
     def checkpoint():
         """Between-stage check. Raises TrainingCancelled after a Stop.
 
-        This is the one place every stage boundary passes through, so later
-        liveness work (heartbeat, #29) can hook in here too.
+        Liveness is not checked here: the heartbeat runs on its own thread
+        because the stages between checkpoints block for minutes.
         """
         if cancel_requested():
             raise TrainingCancelled(job_id)
 
     def set_live(payload):
-        redis_client.setex(f"job_status_{job_id}", 3600, json.dumps(payload))
+        redis_client.psetex(
+            job_status_key(job_id), max(1, int(liveness.status_ttl * 1000)), json.dumps(payload)
+        )
 
     model_path = None
+    heartbeat = None
     try:
         print(f"Processing training task for model {model_id}")
 
@@ -129,6 +133,7 @@ def process_training_task(
         if not _mark_running(job_id, model_id):
             print(f"Training job {job_id} is no longer active; skipping")
             return
+        heartbeat = heartbeat_factory(redis_client, job_id, liveness).start()
 
         set_live({"status": "running", "progress": 0})
         metric_logger.log("preprocessing_started", 1.0)
@@ -253,6 +258,9 @@ def process_training_task(
                 model.status = "failed"
                 db.session.commit()
             set_live({"status": "failed", "error": str(e)})
+    finally:
+        if heartbeat is not None:
+            heartbeat.stop()
 
 
 def _safe(fn, default=None):

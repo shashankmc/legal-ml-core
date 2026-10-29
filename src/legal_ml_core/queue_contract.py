@@ -15,12 +15,33 @@ Control keys (Redis strings, `SETEX` by the API, `EXISTS` by the worker):
   job_cancel_{job_id} -- set by POST /training/stop/<job_id>; the worker checks
   it at pickup, between preprocessing/fit/save stages, and every HF Trainer
   step, and stops the job cooperatively (see compute/tasks.py).
+
+Liveness keys (Redis strings with a TTL, written by the worker; see liveness.py):
+  job_heartbeat_{job_id} -- rewritten every heartbeat while the job runs; each
+  beat also refreshes job_status_{job_id}'s TTL. Absent for a `running` job
+  => the worker died (the API sweep marks it failed).
+  legal_ml_worker_alive -- rewritten while any worker process is up. Absent
+  => queued jobs report that the training service isn't running.
 """
 from typing import Any, List, Optional, TypedDict
 
 # Long enough to outlive any queue wait + training run; the worker never deletes
 # it, so a late-delivered task for a stopped job still sees the flag.
 JOB_CANCEL_TTL_SECONDS = 24 * 3600
+
+
+# job_status_{job_id} lifetime; heartbeats refresh it so long runs keep it.
+JOB_STATUS_TTL_SECONDS = 3600
+
+WORKER_LIVENESS_KEY = "legal_ml_worker_alive"
+
+
+def job_status_key(job_id):
+    return f"job_status_{job_id}"
+
+
+def job_heartbeat_key(job_id):
+    return f"job_heartbeat_{job_id}"
 
 
 def job_cancel_key(job_id):
