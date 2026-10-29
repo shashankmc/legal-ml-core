@@ -3,6 +3,7 @@ from ..auth import jwt_required, get_jwt_identity
 from ..db import db
 from ..models import Model, Dataset, TrainingJob, TrainingMetricPoint
 from ..job_state import (
+    ACTIVE_JOB_STATUSES,
     DEFAULT_STALE_SECONDS,
     TERMINAL_JOB_STATUSES,
     sweep_stale_job,
@@ -60,9 +61,12 @@ def start_training():
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
-        # Check if model is already training
-        if model.status == "training":
-            return jsonify({"error": "Model is already being trained"}), 400
+        # D9: one active job per model, so a double-clicked Train is a no-op.
+        active = TrainingJob.query.filter(
+            TrainingJob.model_id == model_id, TrainingJob.status.in_(ACTIVE_JOB_STATUSES)
+        ).first()
+        if active:
+            return jsonify({"error": "This model is already training", "job_id": active.id}), 409
 
         # Get dataset
         dataset = Dataset.query.get(model.dataset_id)
