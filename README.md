@@ -73,6 +73,33 @@ app.config["OWNER_REF"] = KeycloakOwnerRef()          # default; sub is the owne
 # or: NoOwnerRef()                                            # single-tenant, no auth
 ```
 
+**Authentication is selected by `AUTH_MODE`:**
+
+- `"keycloak"` (default) — verifies an RS/ES-signed Keycloak access token
+  against `AUTH_ISSUER` / `AUTH_AUDIENCE` (JWKS from `AUTH_JWKS_URI` or the
+  issuer). Never accepts HS256.
+- `"platform"` — the host (e.g. Legal Blocks) signs one short-lived HS256 token
+  per forwarded request; its `sub` is the owner, so each platform user's data
+  is isolated without Keycloak. Tokens must carry a string `sub`, `iat` and
+  `exp`, with `exp - iat` at most 60 seconds; RS256 and other algorithms are
+  rejected. Bad, expired or missing tokens get a 401 and a log line.
+  `OWNER_REF = NoOwnerRef()` is refused in this mode (no shared owner).
+- `"none"` — no token; requires `LEGAL_ML_ALLOW_NO_AUTH = True`.
+
+The platform secret's location is the host's concern; the package reads it at
+request time (so the host may create it after this service starts):
+
+```python
+app.config["AUTH_MODE"] = "platform"
+app.config["LEGAL_ML_PLATFORM_SECRET"] = "..."                 # the value, or
+app.config["LEGAL_ML_PLATFORM_SECRET_FILE"] = "/run/ml-secret/secret"  # a path
+```
+
+The value wins over the file. If neither yields a secret the request gets a 503
+naming where the secret was expected (e.g. `platform secret not found at
+/run/ml-secret/secret`), so a deployment problem never looks like a sign-in
+problem.
+
 Projects are optional, selected by `PROJECT_SCOPE`:
 
 - `"none"` (default) — a non-empty `project_id` is an opaque reference the host

@@ -1,4 +1,8 @@
-"""Keycloak/OIDC bearer-token authentication for legal-ml-core routes.
+"""Bearer-token authentication for legal-ml-core routes.
+
+Three modes, selected by ``AUTH_MODE``: ``keycloak`` (default, described
+below), ``platform`` (host-signed HS256 tokens, see ``verify_platform_token``)
+and ``none`` (single-tenant, explicit opt-in).
 
 This module replaces the previous in-app `flask_jwt_extended` authentication.
 It intentionally exposes the same two names the route modules already imported
@@ -32,6 +36,11 @@ from flask import current_app, g, jsonify, request
 # Algorithms Keycloak may use to sign realm tokens. RS256 is the default; the
 # others are included so a realm reconfigured to ECDSA keeps working.
 _ALLOWED_ALGORITHMS = ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"]
+
+# AUTH_MODE="platform" accepts only HS256 tokens signed with the shared platform
+# secret, and only short-lived ones (exp - iat, in seconds).
+_PLATFORM_ALGORITHMS = ["HS256"]
+PLATFORM_TOKEN_MAX_LIFETIME = 60
 
 # PyJWKClient already caches keys; a small registry avoids rebuilding clients
 # (and re-reading discovery config) on every request. Keyed by JWKS URL.
@@ -102,6 +111,75 @@ def verify_bearer_token(token):
     return payload
 
 
+def platform_secret():
+    """Return the platform signing secret, read fresh on every request.
+
+    ``LEGAL_ML_PLATFORM_SECRET`` (the value) wins over
+    ``LEGAL_ML_PLATFORM_SECRET_FILE`` (a path the host writes, e.g. a read-only
+    mounted volume). Where the secret lives is the host's concern; reading it
+    per request means the host may generate it after this service starts.
+
+    A missing secret is a deployment problem, not a sign-in problem, so it
+    raises a 503 that names where the secret was expected.
+    """
+    config = current_app.config
+    value = (config.get("LEGAL_ML_PLATFORM_SECRET") or "").strip()
+    if value:
+        return value
+
+    path = (config.get("LEGAL_ML_PLATFORM_SECRET_FILE") or "").strip()
+    if not path:
+        message = (
+            "AUTH_MODE='platform' but no platform secret is configured: set "
+            "LEGAL_ML_PLATFORM_SECRET or LEGAL_ML_PLATFORM_SECRET_FILE."
+        )
+        current_app.logger.error(message)
+        raise AuthError(message, status_code=503)
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            value = fh.read().strip()
+    except OSError:
+        value = ""
+    if not value:
+        message = f"platform secret not found at {path}"
+        current_app.logger.error(message)
+        raise AuthError(message, status_code=503)
+    return value
+
+
+def verify_platform_token(token, secret=None):
+    """Validate a platform-signed (HS256) token and return its claims.
+
+    Used by ``AUTH_MODE="platform"``: the host signs one short-lived token per
+    forwarded request with a shared secret. Only HS256 is accepted, on a path
+    separate from Keycloak verification (which never accepts HS256). Tokens
+    must carry a string ``sub`` (the owner), ``iat`` and ``exp``, and may be
+    valid for at most ``PLATFORM_TOKEN_MAX_LIFETIME`` seconds.
+    """
+    if secret is None:
+        secret = platform_secret()
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=_PLATFORM_ALGORITHMS,
+            options={"require": ["exp", "iat", "sub"]},
+        )
+    except jwt.InvalidTokenError as exc:
+        raise AuthError(f"Invalid platform token: {exc}")
+
+    # Checked here rather than relying on the PyJWT version's `sub` validation.
+    if not isinstance(payload.get("sub"), str) or not payload["sub"]:
+        raise AuthError("Invalid platform token: subject must be a non-empty string.")
+    if payload["exp"] - payload["iat"] > PLATFORM_TOKEN_MAX_LIFETIME:
+        raise AuthError(
+            "Invalid platform token: lifetime exceeds "
+            f"{PLATFORM_TOKEN_MAX_LIFETIME}s."
+        )
+    return payload
+
+
 def _bearer_token():
     header = request.headers.get("Authorization", "")
     parts = header.split(None, 1)
@@ -111,7 +189,7 @@ def _bearer_token():
 
 
 def auth_mode():
-    """Return the configured auth mode: ``"keycloak"`` (default) or ``"none"``."""
+    """Return the configured auth mode: ``"keycloak"`` (default), ``"platform"`` or ``"none"``."""
     return (current_app.config.get("AUTH_MODE") or "keycloak").strip().lower()
 
 
@@ -148,10 +226,16 @@ def authenticate_request():
     that still wants to JIT-provision a local row can set ``IDENTITY_RESOLVER``;
     its result is exposed via ``current_user()``.
 
+    In ``platform`` mode the host signs one short-lived HS256 token per request
+    with ``LEGAL_ML_PLATFORM_SECRET`` (or the file at
+    ``LEGAL_ML_PLATFORM_SECRET_FILE``); the token ``sub`` is the owner via the
+    same sub-based path. A missing secret is a 503, a bad token a 401, and a
+    shared-owner strategy (``NoOwnerRef``) is refused.
+
     In ``none`` mode (ML-only deployments) no token is required; the owner comes
     from the (typically ``NoOwnerRef``) strategy and every request shares it.
     """
-    from .ownership import owner_ref
+    from .ownership import NoOwnerRef, owner_ref
 
     if auth_mode() == "none":
         _assert_no_auth_is_safe()
@@ -165,7 +249,23 @@ def authenticate_request():
         g.jwt_identity = owner_id
         return None
 
-    payload = verify_bearer_token(_bearer_token())
+    if auth_mode() == "platform":
+        if isinstance(owner_ref(), NoOwnerRef):
+            raise AuthError(
+                "AUTH_MODE='platform' scopes data per token subject, but "
+                "OWNER_REF is NoOwnerRef (one shared owner). Remove OWNER_REF "
+                "or use KeycloakOwnerRef().",
+                status_code=500,
+            )
+        # Secret first: a missing secret must surface as 503, never as 401.
+        secret = platform_secret()
+        try:
+            payload = verify_platform_token(_bearer_token(), secret)
+        except AuthError as exc:
+            current_app.logger.warning("platform token rejected: %s", exc.message)
+            raise
+    else:
+        payload = verify_bearer_token(_bearer_token())
 
     if not payload.get("sub"):
         raise AuthError("Access token has no subject.")
