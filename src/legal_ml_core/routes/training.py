@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from ..db import db
@@ -5,7 +7,6 @@ from ..models import Model, Dataset, TrainingJob, TrainingMetricPoint
 from ..job_state import (
     ACTIVE_JOB_STATUSES,
     DEFAULT_STALE_SECONDS,
-    TERMINAL_JOB_STATUSES,
     sweep_stale_job,
     transition,
     waiting_message,
@@ -17,8 +18,9 @@ import json
 import uuid
 from datetime import datetime
 
-training_bp = Blueprint("training", __name__)
+logger = logging.getLogger(__name__)
 
+training_bp = Blueprint("training", __name__)
 
 
 def _stale_after():
@@ -56,8 +58,13 @@ def start_training():
 
         model_id = data["model_id"]
 
-        # Get model and verify ownership
-        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
+        # Get model and verify ownership. FOR UPDATE (Postgres; SQLite ignores
+        # it) holds the model row until the commit below, so two concurrent
+        # starts serialise here and the second one's active-job check sees
+        # the first one's job.
+        model = (
+            Model.query.filter_by(id=model_id, owner_id=owner_id).with_for_update().first()
+        )
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
@@ -66,6 +73,7 @@ def start_training():
             TrainingJob.model_id == model_id, TrainingJob.status.in_(ACTIVE_JOB_STATUSES)
         ).first()
         if active:
+            db.session.rollback()  # release the model row lock
             return jsonify({"error": "This model is already training", "job_id": active.id}), 409
 
         # Get dataset
@@ -139,26 +147,19 @@ def get_training_status(job_id):
         # progress is set to 100 once, at the end). Merge the live value so the
         # UI stepper actually advances while training runs.
         #
-        # Precedence (A2): a terminal DB state (completed/failed/cancelled) is
-        # final and Redis is not consulted at all; Redis only refines a
-        # non-terminal (pending/running) job.
-        try:
-            raw = (
-                None
-                if job.status in TERMINAL_JOB_STATUSES
-                else current_app.redis_client.get(job_status_key(job_id))
-            )
-            if raw:
-                live = json.loads(raw)
-                if live.get("status"):
-                    job_payload["status"] = live["status"]
-                if live.get("progress") is not None:
-                    job_payload["progress"] = live["progress"]
-                if live.get("error"):
-                    job_payload["error_message"] = live["error"]
-        except Exception:
-            # Live status is best-effort; the DB row still answers the request.
-            pass
+        # Precedence (A2): status and error_message always come from the DB.
+        # Redis is not consulted at all for a terminal job, and for an active
+        # (pending/running) one it only refines progress and live metrics.
+        if job.status in ACTIVE_JOB_STATUSES:
+            try:
+                raw = current_app.redis_client.get(job_status_key(job_id))
+                live = json.loads(raw) if raw else {}
+                for field in ("progress", "metrics"):
+                    if live.get(field) is not None:
+                        job_payload[field] = live[field]
+            except Exception:
+                # Live progress is best-effort; the DB row still answers.
+                pass
 
         return (
             jsonify(
@@ -238,14 +239,14 @@ def stop_training(job_id):
         if not job:
             return jsonify({"error": "Training job not found"}), 404
 
-        if job.status not in ["pending", "running"]:
+        if job.status not in ACTIVE_JOB_STATUSES:
             return jsonify({"error": "Training job is not active"}), 400
 
         # Guarded write: if the worker's final write landed between the check
         # above and here, the job stays completed and Stop is rejected.
         if not transition(
             job_id,
-            ("pending", "running"),
+            ACTIVE_JOB_STATUSES,
             "cancelled",
             model_status="failed",
             reason="stop requested",
@@ -254,10 +255,21 @@ def stop_training(job_id):
             return jsonify({"error": "Training job is not active"}), 400
 
         # Cooperative cancel (D4/OV-E4): the worker polls this flag at pickup,
-        # between stages, and inside HF training.
-        current_app.redis_client.setex(
-            job_cancel_key(job_id), JOB_CANCEL_TTL_SECONDS, "1"
-        )
+        # between stages, and inside HF training. The DB row above is the
+        # authority (the worker's checkpoints read it too), so a Redis failure
+        # here only delays the stop to the next checkpoint: log it, still succeed.
+        try:
+            current_app.redis_client.setex(
+                job_cancel_key(job_id), JOB_CANCEL_TTL_SECONDS, "1"
+            )
+        except Exception as e:
+            logger.warning(
+                "training job %s (owner %s): cancel flag not set, worker will "
+                "see the DB status instead: %s",
+                job_id,
+                owner_id,
+                e,
+            )
 
         return jsonify({"message": "Training stopped successfully"}), 200
 

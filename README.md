@@ -149,6 +149,18 @@ does **not** include the learning-platform's code-execution/package-install
 queues — a host app composing its own worker process should run those
 alongside this, in the same process, using its own code.
 
+**Liveness.** While a job trains, the worker beats a per-job heartbeat key
+every 15s, and a process-wide liveness key while it is up. The API treats a
+`running` job with no beat for `LEGAL_ML_HEARTBEAT_STALE_SECONDS` (Flask config,
+default 120) as dead and marks it failed, and tells queued jobs that the
+training service isn't running when the worker key is that stale. The worker's
+own window is `run_ml_worker(liveness=legal_ml_core.liveness.LivenessTimings(stale_after=...))`, also
+120s by default; keep the two equal.
+
+```python
+app.config["LEGAL_ML_HEARTBEAT_STALE_SECONDS"] = 120  # default
+```
+
 ## Experiment monitoring limitation
 
 Per-step training curves (`TrainingMetricPoint`, polled via

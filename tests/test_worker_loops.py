@@ -138,3 +138,85 @@ def test_start_is_refused_only_while_a_job_is_active(client, auth_headers, app, 
         "/api/training/start", json={"model_id": queued_job["model_id"]}, headers=auth_headers
     )
     assert resp.status_code == expected
+
+
+def test_redis_down_during_training_fails_the_job_with_a_plain_message(
+    app, client, auth_headers, queued_job, caplog
+):
+    """S3: the worker's Redis is unreachable for the whole run. The job ends
+    failed with the retry message, never raw Redis text, and the log names the
+    job and its owner."""
+    import fakeredis
+
+    from legal_ml_core.compute.tasks import process_training_task
+
+    caplog.set_level(logging.INFO, logger="legal_ml_core")
+    server = fakeredis.FakeServer()
+    server.connected = False
+    down = fakeredis.FakeStrictRedis(server=server, decode_responses=True)
+    job_id = queued_job["job_id"]
+
+    process_training_task(queued_job, down, app.config["MODEL_FOLDER"])
+
+    job = client.get(f"/api/training/status/{job_id}", headers=auth_headers).get_json()["job"]
+    assert job["status"] == "failed"
+    assert job["error_message"] == "Training could not start. Try again."
+    with app.app_context():
+        assert db.session.get(Model, queued_job["model_id"]).status == "failed"
+    assert any(
+        job_id in r.getMessage() and TEST_USER_ID in r.getMessage() and "Redis" in r.getMessage()
+        for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+
+def test_unreadable_cancel_flag_falls_back_to_the_db_and_training_continues(
+    app, client, auth_headers, fake_redis, queued_job, monkeypatch
+):
+    from legal_ml_core.compute.tasks import process_training_task
+
+    def down(*a, **k):
+        raise redis_lib.ConnectionError("Error 111 connecting to redis:6379")
+
+    monkeypatch.setattr(fake_redis, "exists", down)
+    job_id = queued_job["job_id"]
+
+    process_training_task(queued_job, fake_redis, app.config["MODEL_FOLDER"])
+
+    job = client.get(f"/api/training/status/{job_id}", headers=auth_headers).get_json()["job"]
+    assert job["status"] == "completed"
+    assert job["error_message"] is None
+
+
+def test_start_locks_the_model_row_before_checking_for_an_active_job(
+    client, auth_headers, app, queued_job
+):
+    """S1: the 409 guard must serialise concurrent starts. SQLite has no row
+    locks, so assert the statements as Postgres would run them: the model row
+    is read FOR UPDATE, and the active-job check comes after, inside the
+    same transaction, so a second start waits for the first to commit and
+    then sees its job."""
+    from sqlalchemy import event
+    from sqlalchemy.dialects import postgresql
+
+    with app.app_context():
+        TrainingJob.query.delete()
+        db.session.commit()
+
+    statements = []
+
+    def record(state):
+        if state.is_select:
+            statements.append(str(state.statement.compile(dialect=postgresql.dialect())))
+
+    event.listen(db.session, "do_orm_execute", record)
+    try:
+        resp = client.post(
+            "/api/training/start", json={"model_id": queued_job["model_id"]}, headers=auth_headers
+        )
+    finally:
+        event.remove(db.session, "do_orm_execute", record)
+
+    assert resp.status_code == 200
+    model_lock = next(i for i, s in enumerate(statements) if "FROM models" in s and "FOR UPDATE" in s)
+    job_check = next(i for i, s in enumerate(statements) if "FROM training_jobs" in s)
+    assert model_lock < job_check

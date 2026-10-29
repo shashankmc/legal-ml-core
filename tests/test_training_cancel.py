@@ -349,3 +349,64 @@ def test_stop_ends_transformer_training_within_one_logging_step_and_skips_eval(
     assert hf.steps_run - stop_at_step <= logging_steps
     assert hf.evaluated is False
     assert trainer.model is None
+
+
+@pytest.mark.parametrize("db_status", ["pending", "running"])
+def test_live_redis_only_refines_progress_of_an_active_job(
+    app, client, auth_headers, fake_redis, queued_job, db_status
+):
+    """A2: status and error come from the DB; Redis only adds live progress."""
+    job_id = queued_job["job_id"]
+    with app.app_context():
+        TrainingJob.query.get(job_id).status = db_status
+        db.session.commit()
+    fake_redis.setex(
+        f"job_status_{job_id}",
+        3600,
+        json.dumps({"status": "failed", "progress": 40, "error": "ConnectionError: redis:6379"}),
+    )
+
+    job = _status(client, auth_headers, job_id)
+    assert job["status"] == db_status
+    assert job["error_message"] is None
+    assert job["progress"] == 40
+
+
+def test_stop_still_stops_the_worker_when_the_cancel_flag_cannot_be_set(
+    app, client, auth_headers, fake_redis, queued_job, monkeypatch, caplog
+):
+    """S5: Redis down for /stop's flag write. The DB cancel stands, the API
+    answers success, and the worker's next checkpoint reads the DB instead."""
+    import logging
+
+    import redis as redis_lib
+
+    caplog.set_level(logging.WARNING, logger="legal_ml_core")
+    job_id = queued_job["job_id"]
+    saves = []
+    responses = []
+
+    def stop_with_redis_down():
+        def down(*a, **k):
+            raise redis_lib.ConnectionError("Error 111 connecting to redis:6379")
+
+        with monkeypatch.context() as m:
+            m.setattr(fake_redis, "setex", down)
+            responses.append(_stop(client, auth_headers, job_id))
+
+    process_training_task(
+        queued_job,
+        fake_redis,
+        app.config["MODEL_FOLDER"],
+        trainer_factory=_paused_trainer(
+            on_fit=stop_with_redis_down, on_save=lambda: saves.append(1)
+        ),
+    )
+
+    assert responses[0].status_code == 200
+    assert _status(client, auth_headers, job_id)["status"] == "cancelled"
+    assert saves == []
+    assert not os.path.exists(_model_file(app, queued_job))
+    assert any(
+        job_id in r.getMessage() and TEST_USER_ID in r.getMessage() for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]

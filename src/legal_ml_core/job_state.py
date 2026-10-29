@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timedelta
 
 from .db import db
-from .liveness import STALE_JOB_MESSAGE, WORKER_DOWN_MESSAGE, is_beat_stale
+from .liveness import DEFAULT_STALE_SECONDS, STALE_JOB_MESSAGE, WORKER_DOWN_MESSAGE, is_beat_stale
 from .models import Model, TrainingJob
 from .queue_contract import WORKER_LIVENESS_KEY, job_heartbeat_key
 
@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 ACTIVE_JOB_STATUSES = ("pending", "running")
 TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled")
 
-DEFAULT_STALE_SECONDS = 120
+# Shown when infrastructure (a loop error, Redis unreachable) ended the job:
+# retryable, and never the raw internal error text.
+COULD_NOT_START_MESSAGE = "Training could not start. Try again."
 
 
 def transition(job_id, from_statuses, to_status, model_status=None, reason=None, **values):

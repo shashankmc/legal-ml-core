@@ -29,9 +29,11 @@ from typing import Any, List, Optional, TypedDict
 # it, so a late-delivered task for a stopped job still sees the flag.
 JOB_CANCEL_TTL_SECONDS = 24 * 3600
 
-
 # job_status_{job_id} lifetime; heartbeats refresh it so long runs keep it.
 JOB_STATUS_TTL_SECONDS = 3600
+
+PREDICTION_RESULT_TTL_SECONDS = 300
+EXPLANATION_RESULT_TTL_SECONDS = 3600
 
 WORKER_LIVENESS_KEY = "legal_ml_worker_alive"
 
@@ -46,6 +48,14 @@ def job_heartbeat_key(job_id):
 
 def job_cancel_key(job_id):
     return f"job_cancel_{job_id}"
+
+
+def prediction_result_key(prediction_id):
+    return f"prediction_result_{prediction_id}"
+
+
+def explanation_result_key(explanation_id):
+    return f"explanation_{explanation_id}"
 
 
 def is_cancel_requested(redis_client, job_id):

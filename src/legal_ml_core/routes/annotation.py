@@ -43,19 +43,13 @@ def get_next_annotation_task(project_id):
     if dataset_id and not _get_owned_dataset(dataset_id, owner_id):
         return jsonify({"success": False, "error": "Dataset not found"}), 404
 
-    query = _owned_tasks(project_id, owner_id).filter(AnnotationTask.status == "pending")
-    total_query = _owned_tasks(project_id, owner_id)
-    annotated_query = _owned_tasks(project_id, owner_id).filter(
-        AnnotationTask.status == "annotated"
-    )
+    tasks = _owned_tasks(project_id, owner_id)
     if dataset_id:
-        query = query.filter(AnnotationTask.dataset_id == dataset_id)
-        total_query = total_query.filter(AnnotationTask.dataset_id == dataset_id)
-        annotated_query = annotated_query.filter(AnnotationTask.dataset_id == dataset_id)
+        tasks = tasks.filter(AnnotationTask.dataset_id == dataset_id)
 
-    task = query.first()
-    total_tasks = total_query.count()
-    annotated_tasks = annotated_query.count()
+    task = tasks.filter(AnnotationTask.status == "pending").first()
+    total_tasks = tasks.count()
+    annotated_tasks = tasks.filter(AnnotationTask.status == "annotated").count()
 
     percentage = int((annotated_tasks / total_tasks * 100) if total_tasks > 0 else 0)
     stats = {

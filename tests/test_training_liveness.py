@@ -84,12 +84,27 @@ def test_heartbeat_is_written_while_a_job_runs_and_removed_after(
 def test_a_run_longer_than_the_status_lifetime_keeps_its_status(
     app, client, auth_headers, fake_redis, queued_job
 ):
+    """Deterministic: the heartbeat thread never fires on its own (huge
+    interval); the test beats explicitly, and stands in for elapsed time by
+    cutting the status key's remaining TTL before each beat."""
     job_id = queued_job["job_id"]
-    timings = LivenessTimings(heartbeat_interval=0.1, stale_after=5, status_ttl=1)
-    seen = {}
+    timings = LivenessTimings(heartbeat_interval=3600, stale_after=7200, status_ttl=60)
+    lifetime_ms = timings.status_ttl * 1000
+    heartbeats = []
+    seen = {"ttl_after_beat": []}
+
+    class ManualHeartbeat(Heartbeat):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            heartbeats.append(self)
 
     def long_fit():
-        time.sleep(timings.status_ttl * 2.5)  # well past the status lifetime
+        # Three rounds of "50s of a 60s lifetime have passed": 150s in total,
+        # well past the status lifetime, yet each beat restores it.
+        for _ in range(3):
+            assert fake_redis.pexpire(job_status_key(job_id), lifetime_ms - 50_000)
+            heartbeats[0].beat()
+            seen["ttl_after_beat"].append(fake_redis.pttl(job_status_key(job_id)))
         seen["live"] = fake_redis.get(job_status_key(job_id))
         seen["job"] = _status(client, auth_headers, job_id)
 
@@ -99,9 +114,10 @@ def test_a_run_longer_than_the_status_lifetime_keeps_its_status(
         app.config["MODEL_FOLDER"],
         trainer_factory=_paused_trainer(on_fit=long_fit),
         liveness=timings,
+        heartbeat_factory=ManualHeartbeat,
     )
 
-    assert seen["live"] is not None
+    assert all(ttl > lifetime_ms - 50_000 for ttl in seen["ttl_after_beat"]), seen
     assert json.loads(seen["live"])["progress"] == 25
     assert seen["job"]["status"] == "running"
     assert seen["job"]["progress"] == 25
@@ -115,6 +131,8 @@ class _Worker:
         self.release = threading.Event()
         self.in_fit = threading.Event()
         self.heartbeats = []
+        self._redis = fake_redis
+        self._job_id = task_info["job_id"]
         worker = self
 
         class RecordingHeartbeat(Heartbeat):
@@ -145,9 +163,13 @@ class _Worker:
         return self
 
     def kill(self):
-        # Process death: beats stop, nothing cleans up the last one.
+        # Process death: beats stop and nothing cleans up the last one, so
+        # put back the beat that stop() removed.
+        key = job_heartbeat_key(self._job_id)
+        last_beat = self._redis.get(key)
         for hb in self.heartbeats:
-            hb.stop(remove_key=False)
+            hb.stop()
+        self._redis.set(key, last_beat)
 
     def __exit__(self, *exc):
         self.release.set()

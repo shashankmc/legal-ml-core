@@ -8,7 +8,7 @@ moment the worker process dies (the OOM case):
   `job_status_{id}` TTL so runs longer than that TTL keep their status;
 - a per-process liveness key (`legal_ml_worker_alive`).
 
-The API side (job_state.sweep_job) reads them: a `running` job without a
+The API side (job_state.sweep_stale_job) reads them: a `running` job without a
 heartbeat becomes `failed`; a `pending` job without a live worker gets a
 "waiting" message. Accepted limit: a hang inside a live process keeps beating.
 """
@@ -32,13 +32,17 @@ STALE_JOB_MESSAGE = (
 )
 WORKER_DOWN_MESSAGE = "Waiting: the training service isn't running"
 
+# No beat for this long => the worker is gone. The API reads its own value
+# from LEGAL_ML_HEARTBEAT_STALE_SECONDS (README); both default to this.
+DEFAULT_STALE_SECONDS = 120
+
 
 @dataclass(frozen=True)
 class LivenessTimings:
     """Seconds. Defaults are the spec values; tests pass tiny ones."""
 
     heartbeat_interval: float = 15
-    stale_after: float = 120  # no beat for this long => worker is gone
+    stale_after: float = DEFAULT_STALE_SECONDS
     status_ttl: float = JOB_STATUS_TTL_SECONDS
 
 
@@ -115,13 +119,12 @@ class Heartbeat(_Beater):
         )
         self._redis.pexpire(job_status_key(self._job_id), _ms(self._timings.status_ttl))
 
-    def stop(self, remove_key=True):
+    def stop(self):
         super().stop()
-        if remove_key:
-            try:
-                self._redis.delete(job_heartbeat_key(self._job_id))
-            except Exception as e:
-                logger.warning("could not clear heartbeat for job %s: %s", self._job_id, e)
+        try:
+            self._redis.delete(job_heartbeat_key(self._job_id))
+        except Exception as e:
+            logger.warning("could not clear heartbeat for job %s: %s", self._job_id, e)
 
 
 class WorkerLiveness(_Beater):

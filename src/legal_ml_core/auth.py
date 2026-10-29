@@ -148,7 +148,7 @@ def platform_secret():
     return value
 
 
-def verify_platform_token(token, secret=None):
+def verify_platform_token(token, secret):
     """Validate a platform-signed (HS256) token and return its claims.
 
     Used by ``AUTH_MODE="platform"``: the host signs one short-lived token per
@@ -157,8 +157,6 @@ def verify_platform_token(token, secret=None):
     must carry a string ``sub`` (the owner), ``iat`` and ``exp``, and may be
     valid for at most ``PLATFORM_TOKEN_MAX_LIFETIME`` seconds.
     """
-    if secret is None:
-        secret = platform_secret()
     try:
         payload = jwt.decode(
             token,

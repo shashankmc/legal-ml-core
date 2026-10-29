@@ -24,13 +24,21 @@ from flask import Flask
 
 from .compute.tasks import process_explanation_task, process_prediction_task, process_training_task
 from .db import db, get_db, set_active_db
-from .job_state import ACTIVE_JOB_STATUSES, transition
+from .compute.tasks import REDIS_DOWN_ERRORS
+from .job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from .liveness import DEFAULT_TIMINGS, start_worker_liveness
-from .queue_contract import JOB_STATUS_TTL_SECONDS, job_status_key
+from .queue_contract import (
+    EXPLANATION_RESULT_TTL_SECONDS,
+    JOB_STATUS_TTL_SECONDS,
+    PREDICTION_RESULT_TTL_SECONDS,
+    explanation_result_key,
+    job_status_key,
+    prediction_result_key,
+)
 
 logger = logging.getLogger(__name__)
 
-LOOP_ERROR_MESSAGE = "Training could not start. Try again."
+LOOP_ERROR_MESSAGE = COULD_NOT_START_MESSAGE
 
 
 def _build_worker_app(database_url):
@@ -55,17 +63,14 @@ def _connect_redis(redis_url, retries=None):
         try:
             client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
             client.ping()
-            print(f"Redis ready at {redis_url}", flush=True)
+            logger.info("Redis ready at %s", redis_url)
             return client
         except Exception as e:
             attempt += 1
             if retries is not None and attempt >= retries:
                 raise
-            print(f"Waiting for Redis ({attempt})...: {e}", flush=True)
+            logger.warning("Waiting for Redis (%s)...: %s", attempt, e)
             time.sleep(3)
-
-
-_REDIS_DOWN_ERRORS = (redis_lib.ConnectionError, redis_lib.TimeoutError)
 
 
 class RedisBackoff:
@@ -100,7 +105,7 @@ def _consume(redis_client, queue, handle, on_error, name, sleep=time.sleep, stop
     while not (stop and stop()):
         try:
             task_data = redis_client.brpop(queue, timeout=10)
-        except _REDIS_DOWN_ERRORS as e:
+        except REDIS_DOWN_ERRORS as e:
             sleep(backoff.failed(e))
             continue
         backoff.succeeded()
@@ -184,17 +189,17 @@ def _prediction_loop(
         prediction_id = task_info["prediction_id"]
         with app.app_context():
             result = process_prediction_task(task_info, model_storage_path)
-        result_key = f"prediction_result_{prediction_id}"
+        result_key = prediction_result_key(prediction_id)
         redis_client.lpush(result_key, json.dumps(result))
-        redis_client.expire(result_key, 300)
+        redis_client.expire(result_key, PREDICTION_RESULT_TTL_SECONDS)
         logger.info("prediction completed (%s)", prediction_id)
 
     def on_error(raw, exc):
         prediction_id = _parse_field(raw, "prediction_id")
         if prediction_id:
-            result_key = f"prediction_result_{prediction_id}"
+            result_key = prediction_result_key(prediction_id)
             redis_client.lpush(result_key, json.dumps({"error": str(exc)}))
-            redis_client.expire(result_key, 300)
+            redis_client.expire(result_key, PREDICTION_RESULT_TTL_SECONDS)
 
     _consume(redis_client, prediction_queue, handle, on_error, "prediction", sleep=sleep, stop=stop)
 
@@ -207,7 +212,9 @@ def _explanation_loop(
         explanation_id = task_info["explanation_id"]
         with app.app_context():
             result = process_explanation_task(task_info, model_storage_path)
-        redis_client.setex(f"explanation_{explanation_id}", 3600, json.dumps(result))
+        redis_client.setex(
+            explanation_result_key(explanation_id), EXPLANATION_RESULT_TTL_SECONDS, json.dumps(result)
+        )
         logger.info(
             "%s explanation generated for model %s",
             result.get("method", "?").upper(),
@@ -218,8 +225,8 @@ def _explanation_loop(
         explanation_id = _parse_field(raw, "explanation_id")
         if explanation_id:
             redis_client.setex(
-                f"explanation_{explanation_id}",
-                3600,
+                explanation_result_key(explanation_id),
+                EXPLANATION_RESULT_TTL_SECONDS,
                 json.dumps({"status": "failed", "error": str(exc)}),
             )
 
@@ -246,6 +253,9 @@ def run_ml_worker(
     window (120s) and the job-status TTL (3600s). The API's sweep reads its
     stale window from `LEGAL_ML_HEARTBEAT_STALE_SECONDS`; keep the two equal.
     """
+    # No-op when the host already configured logging; otherwise the worker's
+    # startup and job lines go to stderr like the print()s they replaced.
+    logging.basicConfig(level=logging.INFO)
     redis_client = _connect_redis(redis_url)
     app = _build_worker_app(database_url)
 
@@ -259,7 +269,9 @@ def run_ml_worker(
     # D12: lets the API tell queued jobs that no worker is running.
     start_worker_liveness(redis_client, liveness)
 
-    print("legal_ml_core worker running (training_queue, prediction_queue, explanation_queue)", flush=True)
+    logger.info(
+        "legal_ml_core worker running (%s, %s, %s)", training_queue, prediction_queue, explanation_queue
+    )
 
     if not block:
         return threads
@@ -268,4 +280,4 @@ def run_ml_worker(
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nShutting down legal_ml_core worker...", flush=True)
+        logger.info("Shutting down legal_ml_core worker...")

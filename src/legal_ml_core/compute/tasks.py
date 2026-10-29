@@ -1,18 +1,25 @@
 import json
+import logging
 import os
 from datetime import datetime
 
 import joblib
 import pandas as pd
+import redis as redis_lib
 
 from ..db import db
-from ..job_state import ACTIVE_JOB_STATUSES, transition
+from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from ..models import Model, TrainingJob, TrainingMetricPoint
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
 from .explain import generate_lime_explanation, generate_shap_explanation
 from .trainer import MLModelTrainer, TrainingCancelled
+
+logger = logging.getLogger(__name__)
+
+# Redis being unreachable (vs. a bad command): reported as a retryable failure.
+REDIS_DOWN_ERRORS = (redis_lib.ConnectionError, redis_lib.TimeoutError)
 
 
 class MetricLogger:
@@ -45,39 +52,47 @@ class MetricLogger:
         return step
 
 
-def _guarded_job_update(job_id, from_statuses, status, **values):
-    """Guarded, logged status write (see job_state.transition): returns False
-    when the job already left `from_statuses`, e.g. cancelled by /stop or
-    failed by the stale sweep."""
-    return transition(job_id, from_statuses, status, **values)
-
-
-def _mark_running(job_id, model_id):
+def _mark_running(job_id):
     """Pickup: pending -> running + started_at in the DB (OV-E3)."""
-    if not _guarded_job_update(
-        job_id, ACTIVE_JOB_STATUSES, status="running", started_at=datetime.utcnow()
-    ):
-        return False
-    model = Model.query.get(model_id)
-    if model:
-        model.status = "training"
-        db.session.commit()
-    return True
+    return transition(
+        job_id,
+        ACTIVE_JOB_STATUSES,
+        "running",
+        model_status="training",
+        started_at=datetime.utcnow(),
+    )
 
 
 def _mark_cancelled(job_id, redis_client):
     """Settle a stopped job as cancelled. /stop normally already wrote the DB
     row; this guarded write only covers the flag-landed-first window."""
-    if _guarded_job_update(
-        job_id, ACTIVE_JOB_STATUSES, status="cancelled", completed_at=datetime.utcnow()
-    ):
-        job = TrainingJob.query.get(job_id)
-        if job and job.model:
-            job.model.status = "failed"  # same as /stop
-            db.session.commit()
-    redis_client.setex(
-        job_status_key(job_id), JOB_STATUS_TTL_SECONDS, json.dumps({"status": "cancelled"})
+    transition(
+        job_id,
+        ACTIVE_JOB_STATUSES,
+        "cancelled",
+        model_status="failed",  # same as /stop
+        completed_at=datetime.utcnow(),
     )
+    _write_live(redis_client, job_id, {"status": "cancelled"}, JOB_STATUS_TTL_SECONDS)
+
+
+def _write_live(redis_client, job_id, payload, ttl_seconds):
+    """Best-effort live status for the API (A2: it only refines progress). A
+    Redis failure here never fails the job."""
+    try:
+        redis_client.psetex(
+            job_status_key(job_id), max(1, int(ttl_seconds * 1000)), json.dumps(payload)
+        )
+    except Exception as e:
+        logger.warning("training job %s: live status not written: %s", job_id, e)
+
+
+def _job_left_active_in_db(job_id):
+    """True once the DB row is no longer pending/running (cancelled by /stop,
+    swept as failed, or gone). Reads the column, not the ORM identity map, so
+    another process's commit is seen."""
+    status = db.session.query(TrainingJob.status).filter(TrainingJob.id == job_id).scalar()
+    return status not in ACTIVE_JOB_STATUSES
 
 
 def process_training_task(
@@ -105,7 +120,15 @@ def process_training_task(
     metric_logger = MetricLogger(job_id)
 
     def cancel_requested():
-        return is_cancel_requested(redis_client, job_id)
+        """Stop check: the Redis flag (cheap, set by /stop), else the DB row,
+        which /stop writes first and which also covers a flag that could not
+        be set or read."""
+        try:
+            if is_cancel_requested(redis_client, job_id):
+                return True
+        except Exception as e:
+            logger.warning("training job %s: cancel flag unreadable, using DB: %s", job_id, e)
+        return _job_left_active_in_db(job_id)
 
     def checkpoint():
         """Between-stage check. Raises TrainingCancelled after a Stop.
@@ -117,21 +140,19 @@ def process_training_task(
             raise TrainingCancelled(job_id)
 
     def set_live(payload):
-        redis_client.psetex(
-            job_status_key(job_id), max(1, int(liveness.status_ttl * 1000)), json.dumps(payload)
-        )
+        _write_live(redis_client, job_id, payload, liveness.status_ttl)
 
     model_path = None
     heartbeat = None
     try:
-        print(f"Processing training task for model {model_id}")
+        logger.info("training job %s: processing model %s", job_id, model_id)
 
         if cancel_requested():
             _mark_cancelled(job_id, redis_client)
-            print(f"Training job {job_id} was stopped before pickup; skipping")
+            logger.info("training job %s was stopped before pickup; skipping", job_id)
             return
-        if not _mark_running(job_id, model_id):
-            print(f"Training job {job_id} is no longer active; skipping")
+        if not _mark_running(job_id):
+            logger.info("training job %s is no longer active; skipping", job_id)
             return
         heartbeat = heartbeat_factory(redis_client, job_id, liveness).start()
 
@@ -164,7 +185,7 @@ def process_training_task(
             task_params["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
             )
-            # Checks the cancel flag every HF step and raises TrainingCancelled
+            # Checks for a Stop every HF step and raises TrainingCancelled
             # itself, skipping evaluate/predict.
             metrics = trainer.train_transformer_model(
                 texts, labels, task_info["model_type"], task_params
@@ -200,19 +221,19 @@ def process_training_task(
         # Guarded final write (D4): only a still-active job becomes completed.
         # If Stop landed at any point up to here, the write misses and the
         # model file just written is removed.
-        if not _guarded_job_update(
+        if not transition(
             job_id,
             ACTIVE_JOB_STATUSES,
-            status="completed",
+            "completed",
+            model_status="completed",
             metrics=metrics,
             progress=100,
             completed_at=datetime.utcnow(),
         ):
             raise TrainingCancelled(job_id)
 
-        model = Model.query.get(model_id)
+        model = db.session.get(Model, model_id)
         if model:
-            model.status = "completed"
             model.metrics = metrics
             model.file_path = model_path
         db.session.commit()
@@ -226,44 +247,62 @@ def process_training_task(
                 "model_path": model_path,
             }
         )
-        print(f"Training completed for model {model_id}")
+        logger.info("training job %s: completed model %s", job_id, model_id)
 
     except Exception as e:
         db.session.rollback()
         # A Stop (or any error raised while a Stop is in flight) settles as
         # cancelled, never failed (OV-E4).
-        if isinstance(e, TrainingCancelled) or _safe(cancel_requested, default=False):
-            print(f"Training job {job_id} cancelled")
+        if isinstance(e, TrainingCancelled) or _call_swallowing_errors_with_rollback(
+            cancel_requested, default=False
+        ):
+            logger.info("training job %s cancelled", job_id)
             _discard_model_file(model_path)
             _mark_cancelled(job_id, redis_client)
-            _safe(lambda: metric_logger.log("training_cancelled", 1.0))
+            _call_swallowing_errors_with_rollback(
+                lambda: metric_logger.log("training_cancelled", 1.0)
+            )
             return
 
-        print(f"Error processing training task: {str(e)}")
         _discard_model_file(model_path)
-        _safe(lambda: metric_logger.log("training_failed", 1.0))
-        # Guarded like the success write: a job that went terminal meanwhile
-        # (e.g. cancelled by /stop) keeps its state.
-        if _guarded_job_update(
-            job_id,
-            ACTIVE_JOB_STATUSES,
-            status="failed",
+        _call_swallowing_errors_with_rollback(lambda: metric_logger.log("training_failed", 1.0))
+        if isinstance(e, REDIS_DOWN_ERRORS):
+            # Infrastructure, not the user's data: never show raw Redis text.
+            error_message = COULD_NOT_START_MESSAGE
+            logger.error(
+                "training job %s (owner %s): Redis unreachable during training: %s",
+                job_id,
+                _owner_of(job_id),
+                e,
+            )
+        else:
             # Persist the reason so the UI can explain the failure instead of
             # showing a generic "Training failed".
-            error_message=str(e),
+            error_message = str(e)
+            logger.warning("training job %s failed: %s", job_id, e)
+        # Guarded like the success write: a job that went terminal meanwhile
+        # (e.g. cancelled by /stop) keeps its state.
+        if transition(
+            job_id,
+            ACTIVE_JOB_STATUSES,
+            "failed",
+            model_status="failed",
+            error_message=error_message,
             completed_at=datetime.utcnow(),
         ):
-            model = Model.query.get(model_id)
-            if model:
-                model.status = "failed"
-                db.session.commit()
-            set_live({"status": "failed", "error": str(e)})
+            set_live({"status": "failed", "error": error_message})
     finally:
         if heartbeat is not None:
             heartbeat.stop()
 
 
-def _safe(fn, default=None):
+def _owner_of(job_id):
+    job = _call_swallowing_errors_with_rollback(lambda: db.session.get(TrainingJob, job_id))
+    return job.owner_id if job else None
+
+
+def _call_swallowing_errors_with_rollback(fn, default=None):
+    """Run `fn`; on any error roll the session back and return `default`."""
     try:
         return fn()
     except Exception:
@@ -287,7 +326,7 @@ def process_prediction_task(task_info, model_storage_path):
     model_type = task_info["model_type"]
     texts = task_info["texts"]  # always a list
 
-    print(f"Processing prediction for model {model_id} ({len(texts)} samples)")
+    logger.info("prediction for model %s (%d samples)", model_id, len(texts))
 
     model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
     if not os.path.exists(model_path):
@@ -398,7 +437,7 @@ def process_explanation_task(task_info, model_storage_path):
     text = task_info["text"]
     method = task_info.get("method", "lime")  # 'lime' or 'shap'
 
-    print(f"Processing {method.upper()} explanation for model {model_id}")
+    logger.info("%s explanation for model %s", method.upper(), model_id)
 
     model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
     if not os.path.exists(model_path):
