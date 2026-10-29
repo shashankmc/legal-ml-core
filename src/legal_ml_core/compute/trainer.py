@@ -27,6 +27,10 @@ from transformers import TrainerCallback
 from .preprocessing import TextPreprocessor
 
 
+class TrainingCancelled(Exception):
+    """Raised when a Stop request (Redis `job_cancel_<id>`) is observed."""
+
+
 class TrainingMetricCallback(TrainerCallback):
     """Feeds HuggingFace Trainer's on_log events into a MetricLogger, giving the
     LegalBERT/RoBERTa path genuine per-step training curves (loss, eval_accuracy,
@@ -46,10 +50,29 @@ class TrainingMetricCallback(TrainerCallback):
                 self.metric_logger.log(metric_name=key, value=value, epoch=state.epoch)
 
 
+class TrainingCancelCallback(TrainerCallback):
+    """Ends HF training at the first step boundary after a Stop request, i.e.
+    well within one logging step (logging_steps=10). Polled every step: one
+    Redis EXISTS per optimizer step is negligible next to a forward/backward
+    pass."""
+
+    def __init__(self, cancel_check):
+        self.cancel_check = cancel_check
+        self.cancelled = False
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.cancel_check():
+            self.cancelled = True
+            control.should_training_stop = True
+        return control
+
+
 class MLModelTrainer:
-    def __init__(self, redis_client, metric_logger=None):
+    def __init__(self, redis_client, metric_logger=None, cancel_check=None):
         self.redis_client = redis_client
         self.metric_logger = metric_logger
+        # Zero-arg callable returning True once Stop was requested.
+        self.cancel_check = cancel_check
         self.preprocessor = None
         self.vectorizer = None
         self.model = None
@@ -449,6 +472,10 @@ class MLModelTrainer:
             }
 
         callbacks = [TrainingMetricCallback(self.metric_logger)] if self.metric_logger else []
+        cancel_callback = None
+        if self.cancel_check:
+            cancel_callback = TrainingCancelCallback(self.cancel_check)
+            callbacks.append(cancel_callback)
 
         hf_trainer = Trainer(
             model=hf_model,
@@ -460,6 +487,11 @@ class MLModelTrainer:
         )
 
         hf_trainer.train()
+        # Stopped: skip evaluate/predict and keep no model (D4/OV-E4).
+        if (cancel_callback and cancel_callback.cancelled) or (
+            self.cancel_check and self.cancel_check()
+        ):
+            raise TrainingCancelled()
         eval_results = hf_trainer.evaluate()
 
         predictions = hf_trainer.predict(test_dataset)

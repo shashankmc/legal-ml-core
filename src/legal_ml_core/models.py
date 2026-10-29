@@ -147,7 +147,7 @@ class TrainingJob(MLBase):
     model_id = db.Column(db.String(36), db.ForeignKey("models.id"), nullable=False)
     status = db.Column(
         db.String(50), default="pending"
-    )  # pending, running, completed, failed
+    )  # pending, running, completed, failed, cancelled
     progress = db.Column(db.Integer, default=0)
     metrics = db.Column(db.JSON)
     error_message = db.Column(db.Text)

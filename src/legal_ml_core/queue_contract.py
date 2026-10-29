@@ -10,8 +10,25 @@ Queue names (Redis lists, `LPUSH`/`BRPOP`):
 
 Result keys (Redis strings/lists, `SETEX`/`LPUSH` + `GET`/`BLPOP`):
   job_status_{job_id}, prediction_result_{prediction_id}, explanation_{explanation_id}
+
+Control keys (Redis strings, `SETEX` by the API, `EXISTS` by the worker):
+  job_cancel_{job_id} -- set by POST /training/stop/<job_id>; the worker checks
+  it at pickup, between preprocessing/fit/save stages, and every HF Trainer
+  step, and stops the job cooperatively (see compute/tasks.py).
 """
 from typing import Any, List, Optional, TypedDict
+
+# Long enough to outlive any queue wait + training run; the worker never deletes
+# it, so a late-delivered task for a stopped job still sees the flag.
+JOB_CANCEL_TTL_SECONDS = 24 * 3600
+
+
+def job_cancel_key(job_id):
+    return f"job_cancel_{job_id}"
+
+
+def is_cancel_requested(redis_client, job_id):
+    return bool(redis_client.exists(job_cancel_key(job_id)))
 
 
 class TrainingTaskPayload(TypedDict, total=False):
@@ -28,7 +45,7 @@ class TrainingTaskPayload(TypedDict, total=False):
 
 
 class JobStatusUpdate(TypedDict, total=False):
-    status: str  # "running" | "completed" | "failed"
+    status: str  # "running" | "completed" | "failed" | "cancelled"
     progress: int  # 0-100
     metrics: Optional[dict]
     model_path: Optional[str]

@@ -1,14 +1,16 @@
 import json
 import os
+from datetime import datetime
 
 import joblib
 import pandas as pd
 
 from ..db import db
 from ..models import Model, TrainingJob, TrainingMetricPoint
+from ..queue_contract import is_cancel_requested
 from ..storage import get_storage_backend
 from .explain import generate_lime_explanation, generate_shap_explanation
-from .trainer import MLModelTrainer
+from .trainer import MLModelTrainer, TrainingCancelled
 
 
 class MetricLogger:
@@ -41,7 +43,54 @@ class MetricLogger:
         return step
 
 
-def process_training_task(task_info, redis_client, model_storage_path):
+ACTIVE_JOB_STATUSES = ("pending", "running")
+
+
+def _guarded_job_update(job_id, from_statuses, **values):
+    """UPDATE training_jobs SET ... WHERE id=? AND status IN from_statuses.
+
+    Returns True when the row was still in one of `from_statuses` and was
+    updated. Terminal states (completed/failed/cancelled) are never in
+    `from_statuses`, so a guarded write can never overwrite them.
+    """
+    updated = (
+        TrainingJob.query.filter(
+            TrainingJob.id == job_id, TrainingJob.status.in_(from_statuses)
+        ).update(values, synchronize_session=False)
+    )
+    db.session.commit()
+    return updated == 1
+
+
+def _mark_running(job_id, model_id):
+    """Pickup: pending -> running + started_at in the DB (OV-E3)."""
+    if not _guarded_job_update(
+        job_id, ACTIVE_JOB_STATUSES, status="running", started_at=datetime.utcnow()
+    ):
+        return False
+    model = Model.query.get(model_id)
+    if model:
+        model.status = "training"
+        db.session.commit()
+    return True
+
+
+def _mark_cancelled(job_id, redis_client):
+    """Settle a stopped job as cancelled. /stop normally already wrote the DB
+    row; this guarded write only covers the flag-landed-first window."""
+    if _guarded_job_update(
+        job_id, ACTIVE_JOB_STATUSES, status="cancelled", completed_at=datetime.utcnow()
+    ):
+        job = TrainingJob.query.get(job_id)
+        if job and job.model:
+            job.model.status = "failed"  # same as /stop
+            db.session.commit()
+    redis_client.setex(f"job_status_{job_id}", 3600, json.dumps({"status": "cancelled"}))
+
+
+def process_training_task(
+    task_info, redis_client, model_storage_path, trainer_factory=MLModelTrainer
+):
     """Runs one training task. Must be called with a Flask app context pushed
     (db.session/Model.query need it) — see legal_ml_core.worker.run_ml_worker.
 
@@ -54,28 +103,53 @@ def process_training_task(task_info, redis_client, model_storage_path):
     model_id = task_info["model_id"]
     metric_logger = MetricLogger(job_id)
 
+    def cancel_requested():
+        return is_cancel_requested(redis_client, job_id)
+
+    def checkpoint():
+        """Between-stage check. Raises TrainingCancelled after a Stop.
+
+        This is the one place every stage boundary passes through, so later
+        liveness work (heartbeat, #29) can hook in here too.
+        """
+        if cancel_requested():
+            raise TrainingCancelled(job_id)
+
+    def set_live(payload):
+        redis_client.setex(f"job_status_{job_id}", 3600, json.dumps(payload))
+
+    model_path = None
     try:
         print(f"Processing training task for model {model_id}")
 
-        redis_client.setex(
-            f"job_status_{job_id}", 3600, json.dumps({"status": "running", "progress": 0})
-        )
+        if cancel_requested():
+            _mark_cancelled(job_id, redis_client)
+            print(f"Training job {job_id} was stopped before pickup; skipping")
+            return
+        if not _mark_running(job_id, model_id):
+            print(f"Training job {job_id} is no longer active; skipping")
+            return
+
+        set_live({"status": "running", "progress": 0})
         metric_logger.log("preprocessing_started", 1.0)
 
         # Load dataset
         df = pd.read_csv(task_info["dataset_path"])
 
         # Initialize trainer
-        trainer = MLModelTrainer(redis_client=redis_client, metric_logger=metric_logger)
+        trainer = trainer_factory(
+            redis_client=redis_client,
+            metric_logger=metric_logger,
+            cancel_check=cancel_requested,
+        )
 
         # Preprocess data
         texts, labels, label_names = trainer.preprocess_data(
             df, task_info["task_type"], task_info.get("preprocessing_options", {})
         )
+        checkpoint()
 
-        redis_client.setex(
-            f"job_status_{job_id}", 3600, json.dumps({"status": "running", "progress": 25})
-        )
+        set_live({"status": "running", "progress": 25})
         metric_logger.log("preprocessing_done", 1.0)
         metric_logger.log("training_started", 1.0)
 
@@ -85,6 +159,8 @@ def process_training_task(task_info, redis_client, model_storage_path):
             task_params["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
             )
+            # Checks the cancel flag every HF step and raises TrainingCancelled
+            # itself, skipping evaluate/predict.
             metrics = trainer.train_transformer_model(
                 texts, labels, task_info["model_type"], task_params
             )
@@ -107,73 +183,92 @@ def process_training_task(task_info, redis_client, model_storage_path):
                 )
         else:
             raise ValueError(f"Unsupported task type: {task_info['task_type']}")
+        checkpoint()
 
-        redis_client.setex(
-            f"job_status_{job_id}", 3600, json.dumps({"status": "running", "progress": 75})
-        )
+        set_live({"status": "running", "progress": 75})
         metric_logger.log("training_done", 1.0)
 
         # Save model
         model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
         trainer.save_model(model_path)
-        metric_logger.log("model_saved", 1.0)
 
-        # Update job status to completed in Redis
-        redis_client.setex(
-            f"job_status_{job_id}",
-            3600,
-            json.dumps(
-                {
-                    "status": "completed",
-                    "progress": 100,
-                    "metrics": metrics,
-                    "model_path": model_path,
-                }
-            ),
-        )
+        # Guarded final write (D4): only a still-active job becomes completed.
+        # If Stop landed at any point up to here, the write misses and the
+        # model file just written is removed.
+        if not _guarded_job_update(
+            job_id,
+            ACTIVE_JOB_STATUSES,
+            status="completed",
+            metrics=metrics,
+            progress=100,
+            completed_at=datetime.utcnow(),
+        ):
+            raise TrainingCancelled(job_id)
 
-        # Update model + training job in the database via the shared ORM models
         model = Model.query.get(model_id)
-        job = TrainingJob.query.get(job_id)
         if model:
             model.status = "completed"
             model.metrics = metrics
             model.file_path = model_path
-        if job:
-            job.status = "completed"
-            job.metrics = metrics
-            job.progress = 100
-            from datetime import datetime
-
-            job.completed_at = datetime.utcnow()
         db.session.commit()
+        metric_logger.log("model_saved", 1.0)
 
+        set_live(
+            {
+                "status": "completed",
+                "progress": 100,
+                "metrics": metrics,
+                "model_path": model_path,
+            }
+        )
         print(f"Training completed for model {model_id}")
 
     except Exception as e:
         db.session.rollback()
+        # A Stop (or any error raised while a Stop is in flight) settles as
+        # cancelled, never failed (OV-E4).
+        if isinstance(e, TrainingCancelled) or _safe(cancel_requested, default=False):
+            print(f"Training job {job_id} cancelled")
+            _discard_model_file(model_path)
+            _mark_cancelled(job_id, redis_client)
+            _safe(lambda: metric_logger.log("training_cancelled", 1.0))
+            return
+
         print(f"Error processing training task: {str(e)}")
-        redis_client.setex(
-            f"job_status_{job_id}", 3600, json.dumps({"status": "failed", "error": str(e)})
-        )
-        try:
-            metric_logger.log("training_failed", 1.0)
-        except Exception:
-            pass
-
-        model = Model.query.get(model_id)
-        job = TrainingJob.query.get(job_id)
-        if model:
-            model.status = "failed"
-        if job:
-            from datetime import datetime
-
-            job.status = "failed"
+        _discard_model_file(model_path)
+        _safe(lambda: metric_logger.log("training_failed", 1.0))
+        # Guarded like the success write: a job that went terminal meanwhile
+        # (e.g. cancelled by /stop) keeps its state.
+        if _guarded_job_update(
+            job_id,
+            ACTIVE_JOB_STATUSES,
+            status="failed",
             # Persist the reason so the UI can explain the failure instead of
             # showing a generic "Training failed".
-            job.error_message = str(e)
-            job.completed_at = datetime.utcnow()
-        db.session.commit()
+            error_message=str(e),
+            completed_at=datetime.utcnow(),
+        ):
+            model = Model.query.get(model_id)
+            if model:
+                model.status = "failed"
+                db.session.commit()
+            set_live({"status": "failed", "error": str(e)})
+
+
+def _safe(fn, default=None):
+    try:
+        return fn()
+    except Exception:
+        db.session.rollback()
+        return default
+
+
+def _discard_model_file(model_path):
+    if model_path and os.path.exists(model_path):
+        try:
+            os.remove(model_path)
+        except OSError:
+            pass
 
 
 def process_prediction_task(task_info, model_storage_path):

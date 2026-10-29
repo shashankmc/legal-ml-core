@@ -2,12 +2,15 @@ from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from ..db import db
 from ..models import Model, Dataset, TrainingJob, TrainingMetricPoint
+from ..queue_contract import JOB_CANCEL_TTL_SECONDS, job_cancel_key
 from .models import validate_model_task_compatibility
 import json
 import uuid
 from datetime import datetime
 
 training_bp = Blueprint("training", __name__)
+
+TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled")
 
 
 @training_bp.route("/start", methods=["POST"])
@@ -101,8 +104,16 @@ def get_training_status(job_id):
         # The worker only writes fine-grained progress to Redis (the DB row's
         # progress is set to 100 once, at the end). Merge the live value so the
         # UI stepper actually advances while training runs.
+        #
+        # Precedence (A2): a terminal DB state (completed/failed/cancelled) is
+        # final and Redis is not consulted at all; Redis only refines a
+        # non-terminal (pending/running) job.
         try:
-            raw = current_app.redis_client.get(f"job_status_{job_id}")
+            raw = (
+                None
+                if job.status in TERMINAL_JOB_STATUSES
+                else current_app.redis_client.get(f"job_status_{job_id}")
+            )
             if raw:
                 live = json.loads(raw)
                 if live.get("status"):
@@ -195,15 +206,28 @@ def stop_training(job_id):
         if job.status not in ["pending", "running"]:
             return jsonify({"error": "Training job is not active"}), 400
 
-        # Update job status
-        job.status = "cancelled"
-        job.completed_at = datetime.utcnow()
+        # Guarded write: if the worker's final write landed between the check
+        # above and here, the job stays completed and Stop is rejected.
+        stopped = TrainingJob.query.filter(
+            TrainingJob.id == job_id, TrainingJob.status.in_(["pending", "running"])
+        ).update(
+            {"status": "cancelled", "completed_at": datetime.utcnow()},
+            synchronize_session=False,
+        )
+        if not stopped:
+            db.session.rollback()
+            return jsonify({"error": "Training job is not active"}), 400
 
-        # Update model status
         if job.model:
             job.model.status = "failed"
 
         db.session.commit()
+
+        # Cooperative cancel (D4/OV-E4): the worker polls this flag at pickup,
+        # between stages, and inside HF training.
+        current_app.redis_client.setex(
+            job_cancel_key(job_id), JOB_CANCEL_TTL_SECONDS, "1"
+        )
 
         return jsonify({"message": "Training stopped successfully"}), 200
 
