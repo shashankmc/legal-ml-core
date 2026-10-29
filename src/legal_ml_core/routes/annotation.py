@@ -12,6 +12,25 @@ from ..db_utils import project_belongs_to_owner
 annotation_bp = Blueprint("annotation", __name__)
 
 
+def _get_owned_dataset(dataset_id, owner_id):
+    """The dataset with ``dataset_id`` owned by ``owner_id``, else ``None``.
+
+    Not-found and not-yours are deliberately indistinguishable to the caller.
+    """
+    return Dataset.query.filter_by(id=dataset_id, owner_id=str(owner_id)).first()
+
+
+def _owned_tasks(project_id, owner_id):
+    """Query over annotation tasks of the caller's own datasets on ``project_id``.
+
+    ``project_id`` alone is not an ownership check: another owner's dataset can
+    reference the same project id, so the dataset owner is filtered too.
+    """
+    return AnnotationTask.query.join(Dataset).filter(
+        Dataset.project_id == project_id, Dataset.owner_id == str(owner_id)
+    )
+
+
 @annotation_bp.route("/projects/<project_id>/queue/next", methods=["GET"])
 @jwt_required()
 def get_next_annotation_task(project_id):
@@ -20,37 +39,23 @@ def get_next_annotation_task(project_id):
     if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
 
-    query = AnnotationTask.query.join(Dataset).filter(
-        Dataset.project_id == project_id, AnnotationTask.status == "pending"
-    )
-
     dataset_id = request.args.get("dataset")
+    if dataset_id and not _get_owned_dataset(dataset_id, owner_id):
+        return jsonify({"success": False, "error": "Dataset not found"}), 404
+
+    query = _owned_tasks(project_id, owner_id).filter(AnnotationTask.status == "pending")
+    total_query = _owned_tasks(project_id, owner_id)
+    annotated_query = _owned_tasks(project_id, owner_id).filter(
+        AnnotationTask.status == "annotated"
+    )
     if dataset_id:
-        query = query.filter(Dataset.id == dataset_id)
+        query = query.filter(AnnotationTask.dataset_id == dataset_id)
+        total_query = total_query.filter(AnnotationTask.dataset_id == dataset_id)
+        annotated_query = annotated_query.filter(AnnotationTask.dataset_id == dataset_id)
 
     task = query.first()
-
-    if dataset_id:
-        total_tasks = AnnotationTask.query.filter(
-            AnnotationTask.dataset_id == dataset_id
-        ).count()
-        annotated_tasks = AnnotationTask.query.filter(
-            AnnotationTask.dataset_id == dataset_id,
-            AnnotationTask.status == "annotated",
-        ).count()
-    else:
-        total_tasks = (
-            AnnotationTask.query.join(Dataset)
-            .filter(Dataset.project_id == project_id)
-            .count()
-        )
-        annotated_tasks = (
-            AnnotationTask.query.join(Dataset)
-            .filter(
-                Dataset.project_id == project_id, AnnotationTask.status == "annotated"
-            )
-            .count()
-        )
+    total_tasks = total_query.count()
+    annotated_tasks = annotated_query.count()
 
     percentage = int((annotated_tasks / total_tasks * 100) if total_tasks > 0 else 0)
     stats = {
@@ -83,26 +88,11 @@ def get_annotation_queue_stats(project_id):
     if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
 
-    total_tasks = (
-        AnnotationTask.query.join(Dataset)
-        .filter(Dataset.project_id == project_id)
-        .count()
-    )
-    pending_tasks = (
-        AnnotationTask.query.join(Dataset)
-        .filter(Dataset.project_id == project_id, AnnotationTask.status == "pending")
-        .count()
-    )
-    annotated_tasks = (
-        AnnotationTask.query.join(Dataset)
-        .filter(Dataset.project_id == project_id, AnnotationTask.status == "annotated")
-        .count()
-    )
-    skipped_tasks = (
-        AnnotationTask.query.join(Dataset)
-        .filter(Dataset.project_id == project_id, AnnotationTask.status == "skipped")
-        .count()
-    )
+    tasks = _owned_tasks(project_id, owner_id)
+    total_tasks = tasks.count()
+    pending_tasks = tasks.filter(AnnotationTask.status == "pending").count()
+    annotated_tasks = tasks.filter(AnnotationTask.status == "annotated").count()
+    skipped_tasks = tasks.filter(AnnotationTask.status == "skipped").count()
 
     return jsonify({
         "success": True,
@@ -207,7 +197,7 @@ def list_annotation_tasks(project_id):
     status = request.args.get("status")
     dataset_id = request.args.get("dataset_id")
 
-    query = AnnotationTask.query.join(Dataset).filter(Dataset.project_id == project_id)
+    query = _owned_tasks(project_id, owner_id)
     if status:
         query = query.filter(AnnotationTask.status == status)
     if dataset_id:
@@ -226,11 +216,7 @@ def reset_annotation_tasks(project_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
 
     try:
-        tasks = (
-            AnnotationTask.query.join(Dataset)
-            .filter(Dataset.project_id == project_id)
-            .all()
-        )
+        tasks = _owned_tasks(project_id, owner_id).all()
         for task in tasks:
             task.status = "pending"
             task.annotation_label = None
