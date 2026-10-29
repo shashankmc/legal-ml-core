@@ -83,8 +83,6 @@ def test_upload_rejects_disallowed_extension(client, auth_headers):
 
 
 def test_datasets_are_scoped_to_owning_user(client, auth_headers, app):
-    from flask_jwt_extended import create_access_token
-
     from legal_ml_core import Dataset, db
 
     with app.app_context():

@@ -1,0 +1,78 @@
+{
+  "@context": "https://w3id.org/codemeta/3.0",
+  "@type": "SoftwareSourceCode",
+  "name": "legal-ml-core",
+  "description": "Backend of the Legal Blocks / BAIGLE no-code machine learning workbench for legal text, as an installable Flask extension: dataset upload, validation and EDA; training, prediction and LIME/SHAP explanation for scikit-learn and transformer models; visualization; annotation; and experiment monitoring, shared between the HTTP API process and a Redis-driven training worker.",
+  "version": "0.2.0",
+  "dateModified": "2026-10-29",
+  "datePublished": "2026-10-29",
+  "license": "https://spdx.org/licenses/MIT",
+  "codeRepository": "https://github.com/shashankmc/legal-ml-core",
+  "issueTracker": "https://github.com/shashankmc/legal-ml-core/issues",
+  "readme": "https://github.com/shashankmc/legal-ml-core/blob/main/README.md",
+  "programmingLanguage": {
+    "@type": "ComputerLanguage",
+    "name": "Python",
+    "url": "https://www.python.org"
+  },
+  "runtimePlatform": "Python >=3.11",
+  "operatingSystem": [
+    "Linux",
+    "macOS",
+    "Windows"
+  ],
+  "softwareRequirements": [
+    "Flask>=2.3,<3",
+    "Flask-SQLAlchemy>=3.0.5,<4",
+    "SQLAlchemy>=2.0,<3",
+    "PyJWT[crypto]>=2.8,<3",
+    "redis>=5.0,<6",
+    "psycopg2-binary>=2.9.7,<3",
+    "pandas>=2.1,<3",
+    "numpy>=1.24,<2",
+    "scikit-learn>=1.4,<2",
+    "transformers[torch]>=4.35,<5",
+    "accelerate>=0.24",
+    "spacy>=3.7,<4",
+    "nltk>=3.8,<4",
+    "plotly>=5.17,<6",
+    "lime>=0.2.0",
+    "shap>=0.43",
+    "joblib>=1.3"
+  ],
+  "author": [
+    {
+      "@type": "Person",
+      "givenName": "Shashank",
+      "familyName": "Chakravarthy",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "Maastricht University"
+      }
+    }
+  ],
+  "copyrightHolder": [
+    {
+      "@type": "Person",
+      "givenName": "Shashank",
+      "familyName": "Chakravarthy",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "Maastricht University"
+      }
+    }
+  ],
+  "keywords": [
+    "legal NLP",
+    "no-code machine learning",
+    "education",
+    "Legal Blocks",
+    "Flask",
+    "explainable AI"
+  ],
+  "developmentStatus": "https://www.repostatus.org/#active",
+  "applicationCategory": "Legal informatics; Machine learning education",
+  "relatedLink": [
+    "https://github.com/shashankmc/vue-legal-ml-builder"
+  ]
+}

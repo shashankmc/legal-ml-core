@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "legal-ml-core"
+abstract: >-
+  legal-ml-core is the backend of the Legal Blocks / BAIGLE no-code machine
+  learning workbench for legal text, packaged as an installable Flask
+  extension. It provides dataset upload, validation and exploratory data
+  analysis; model configuration, training, prediction and LIME/SHAP
+  explanation for classical scikit-learn and transformer (LegalBERT, RoBERTa)
+  models; visualization; annotation task queues; and experiment monitoring.
+  The same SQLAlchemy models and compute engine are shared by the HTTP API
+  process and a separate Redis-driven training worker. It is designed for
+  teaching legal professionals and students machine learning without
+  writing code.
+authors:
+  - family-names: "Chakravarthy"
+    given-names: "Shashank"
+    affiliation: "Maastricht University"
+    # TODO(owner): add your ORCID and uncomment the next line.
+    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
+license: MIT
+repository-code: "https://github.com/shashankmc/legal-ml-core"
+url: "https://github.com/shashankmc/legal-ml-core"
+version: "0.2.0"
+date-released: "2026-10-29"
+keywords:
+  - "legal NLP"
+  - "no-code machine learning"
+  - "education"
+  - "Legal Blocks"
+  - "Flask"
+  - "explainable AI"
+references:
+  - type: software
+    title: "vue-legal-ml-builder"
+    abstract: >-
+      Vue 3 component library providing the user interface for the same
+      legal-ML workbench; it talks to legal-ml-core's HTTP API through a
+      host-supplied adapter.
+    authors:
+      - family-names: "Chakravarthy"
+        given-names: "Shashank"
+        affiliation: "Maastricht University"
+    repository-code: "https://github.com/shashankmc/vue-legal-ml-builder"
+    license: MIT

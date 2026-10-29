@@ -1,0 +1,36 @@
+{
+  "upload_type": "software",
+  "title": "legal-ml-core",
+  "description": "Backend of the Legal Blocks / BAIGLE no-code machine learning workbench for legal text, as an installable Flask extension: dataset upload, validation and EDA; training, prediction and LIME/SHAP explanation for scikit-learn and transformer models; visualization; annotation; and experiment monitoring, shared between the HTTP API process and a Redis-driven training worker.",
+  "version": "0.2.0",
+  "creators": [
+    {
+      "name": "Chakravarthy, Shashank",
+      "affiliation": "Maastricht University"
+    }
+  ],
+  "license": "mit",
+  "keywords": [
+    "legal NLP",
+    "no-code machine learning",
+    "education",
+    "Legal Blocks",
+    "Flask",
+    "explainable AI"
+  ],
+  "access_right": "open",
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/shashankmc/legal-ml-core",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://github.com/shashankmc/vue-legal-ml-builder",
+      "relation": "references",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ]
+}

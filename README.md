@@ -1,5 +1,8 @@
 # legal-ml-core
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/shashankmc/legal-ml-core/actions/workflows/ci.yml/badge.svg)](https://github.com/shashankmc/legal-ml-core/actions/workflows/ci.yml)
+
 Core ML feature for BAIGLE-style legal-ML apps — dataset management, model
 training/prediction/explanation, visualization, EDA, annotation, and
 experiment monitoring — as an installable Flask package, extracted from the
@@ -175,9 +178,42 @@ comparison (`GET /visualization/parameter-comparison`) works uniformly
 across all model types since it's retrospective, reading already-stored
 `Model.parameters`/`TrainingJob.metrics`.
 
+## API and data formats
+
+- [`docs/openapi.yaml`](docs/openapi.yaml): OpenAPI 3.1 description of every
+  HTTP route `init_ml_feature` registers (kept in sync by
+  `tests/test_openapi.py`).
+- [`docs/data-formats.md`](docs/data-formats.md): dataset upload columns per
+  task type, and how trained models are stored and exported.
+
 ## Development
 
 ```bash
 pip install -e ".[test]"
 pytest
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, releases and citation
+metadata, and [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
+
+## How to cite
+
+If you use legal-ml-core in research or teaching, please cite it. The
+citation metadata is in [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this
+repository" button reads it); [`codemeta.json`](codemeta.json) carries the
+same metadata in CodeMeta form.
+
+> Chakravarthy, S. (2026). *legal-ml-core* (Version 0.2.0) [Computer
+> software]. Maastricht University. https://github.com/shashankmc/legal-ml-core
+
+**DOI:** not yet assigned. Once the repository is connected to Zenodo, each
+GitHub release will be archived there and its DOI (and a DOI badge) will be
+added to this section and to `CITATION.cff`.
+
+The user interface for this backend is
+[vue-legal-ml-builder](https://github.com/shashankmc/vue-legal-ml-builder);
+cite both if you use both.
+
+## License
+
+[MIT](LICENSE) © 2026 Shashank Chakravarthy, Maastricht University.
