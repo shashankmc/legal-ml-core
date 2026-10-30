@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
 from ..db import db
+from ..annotation_queue import record_rows_to_label
 from ..models import Dataset
 import pandas as pd
 import os
@@ -365,6 +366,7 @@ def upload_dataset():
             task_type=task_type,
             labels=labels if labels else None,
         )
+        record_rows_to_label(dataset, df)
 
         db.session.add(dataset)
         db.session.commit()

@@ -1,4 +1,6 @@
 """A dataset on a project offers its unlabelled rows for annotation."""
+import io
+
 import pandas as pd
 
 from legal_ml_core import AnnotationTask, Dataset, Model, TrainingJob, db
@@ -18,13 +20,28 @@ def _link_dataset(app, tmp_path, rows, task_type="classification", name="data.cs
         name=name,
         file_path=str(path),
         row_count=len(next(iter(rows.values()))),
-        columns=[],
+        columns=[{"name": column} for column in rows],
         task_type=task_type,
         project_id=PROJECT_ID,
     )
     db.session.add(dataset)
     db.session.commit()
     return dataset.id
+
+
+def _upload(client, auth_headers, csv_text):
+    resp = client.post(
+        "/api/datasets/upload",
+        data={
+            "file": (io.BytesIO(csv_text.encode()), "rows.csv"),
+            "name": "Rows",
+            "task_type": "classification",
+        },
+        headers=auth_headers,
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 201
+    return resp.get_json()["dataset"]["id"]
 
 
 def _next(client, auth_headers):
@@ -137,6 +154,51 @@ def test_stats_count_rows_before_the_queue_is_opened(client, auth_headers, app, 
     resp = client.get(f"/api/annotation/projects/{PROJECT_ID}/queue/stats", headers=auth_headers)
 
     assert resp.get_json()["stats"]["pending"] == 2
+
+
+def _rewrite(tmp_path, rows):
+    pd.DataFrame(rows).to_csv(tmp_path / "data.csv", index=False)
+
+
+def test_a_fully_labelled_file_is_read_only_once(client, auth_headers, app, tmp_path):
+    _link_dataset(app, tmp_path, {"text": ["a", "b"], "label": ["x", "y"]})
+    _next(client, auth_headers)
+
+    # Only a second read of the file could find this row.
+    _rewrite(tmp_path, {"text": ["a", "b"], "label": ["x", None]})
+
+    assert _next(client, auth_headers)["stats"]["total"] == 0
+
+
+def test_an_uploaded_labelled_file_is_never_read_for_the_queue(client, auth_headers, app, tmp_path):
+    app.config.setdefault("_known_projects", set()).add((PROJECT_ID, TEST_USER_ID))
+    dataset_id = _upload(client, auth_headers, "text,label\na,x\nb,y\n")
+    dataset = db.session.get(Dataset, dataset_id)
+    dataset.project_id = PROJECT_ID
+    db.session.commit()
+
+    with open(dataset.file_path, "w") as rewritten:
+        rewritten.write("text,label\na,x\nb,\n")
+
+    assert _next(client, auth_headers)["stats"]["total"] == 0
+
+
+def test_upload_counts_rows_to_label_the_way_the_queue_does(client, auth_headers):
+    # One blank label, one whitespace label, one blank text, one labelled.
+    dataset_id = _upload(client, auth_headers, 'text,label\na,\nb,"   "\n,\nc,x\n')
+
+    columns = db.session.get(Dataset, dataset_id).columns
+
+    assert [c["rows_to_label"] for c in columns if c["name"] == "text"] == [2]
+
+
+def test_reading_the_queue_records_the_count_for_older_datasets(client, auth_headers, app, tmp_path):
+    dataset_id = _link_dataset(app, tmp_path, {"text": ["a", "b", None], "label": ["  ", "x", None]})
+
+    _next(client, auth_headers)
+
+    columns = db.session.get(Dataset, dataset_id).columns
+    assert [c["rows_to_label"] for c in columns if c["name"] == "text"] == [1]
 
 
 def _queued_task(app, tmp_path, client, auth_headers):
