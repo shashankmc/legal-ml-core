@@ -119,15 +119,15 @@ def test_two_rapid_starts_make_one_job(client, auth_headers, app, fake_redis, qu
     second = client.post("/api/training/start", json={"model_id": model_id}, headers=auth_headers)
 
     assert first.status_code == 200
-    assert second.status_code == 409
-    assert second.get_json()["error"] == "This model is already training"
+    assert second.status_code == 200
+    assert second.get_json()["job_id"] == first.get_json()["job_id"]
     assert fake_redis.llen("training_queue") == 1
     with app.app_context():
         assert TrainingJob.query.filter_by(model_id=model_id).count() == 1
 
 
-@pytest.mark.parametrize("status, expected", [("running", 409), ("completed", 200), ("failed", 200), ("cancelled", 200)])
-def test_start_is_refused_only_while_a_job_is_active(client, auth_headers, app, queued_job, status, expected):
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_a_finished_job_does_not_stop_a_new_start(client, auth_headers, app, queued_job, status):
     with app.app_context():
         job = db.session.get(TrainingJob, queued_job["job_id"])
         job.status = status
@@ -137,7 +137,8 @@ def test_start_is_refused_only_while_a_job_is_active(client, auth_headers, app, 
     resp = client.post(
         "/api/training/start", json={"model_id": queued_job["model_id"]}, headers=auth_headers
     )
-    assert resp.status_code == expected
+    assert resp.status_code == 200
+    assert resp.get_json()["job_id"] != queued_job["job_id"]
 
 
 def test_redis_down_during_training_fails_the_job_with_a_plain_message(
@@ -190,7 +191,7 @@ def test_unreadable_cancel_flag_falls_back_to_the_db_and_training_continues(
 def test_start_locks_the_model_row_before_checking_for_an_active_job(
     client, auth_headers, app, queued_job
 ):
-    """S1: the 409 guard must serialise concurrent starts. SQLite has no row
+    """S1: the one-active-job guard must serialise concurrent starts. SQLite has no row
     locks, so assert the statements as Postgres would run them: the model row
     is read FOR UPDATE, and the active-job check comes after, inside the
     same transaction, so a second start waits for the first to commit and

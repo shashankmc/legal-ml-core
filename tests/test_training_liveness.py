@@ -236,6 +236,7 @@ def test_queued_job_has_no_waiting_message_while_a_worker_is_alive(
     fast_api, client, auth_headers, fake_redis, queued_job
 ):
     job_id = queued_job["job_id"]
+    fake_redis.lpush("training_queue", json.dumps({"job_id": job_id}))
     liveness = start_worker_liveness(fake_redis, FAST)
     try:
         time.sleep(FAST.stale_after * 2)  # survives past one stale window
