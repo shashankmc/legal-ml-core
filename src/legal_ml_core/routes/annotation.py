@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 from ..db import db
 from ..models import Dataset, AnnotationTask
+from ..active_learning.loop import reset_loops
 from ..annotation_queue import ensure_project_tasks
 from ..db_utils import project_belongs_to_owner
 
@@ -50,7 +51,12 @@ def get_next_annotation_task(project_id):
     if dataset_id:
         tasks = tasks.filter(AnnotationTask.dataset_id == dataset_id)
 
-    task = tasks.filter(AnnotationTask.status == "pending").order_by(AnnotationTask.item_index).first()
+    # Scored items first, best first. Rows no loop has scored stay in row order.
+    task = (
+        tasks.filter(AnnotationTask.status == "pending")
+        .order_by(AnnotationTask.score.desc().nulls_last(), AnnotationTask.item_index)
+        .first()
+    )
     total_tasks = tasks.count()
     annotated_tasks = tasks.filter(AnnotationTask.status == "annotated").count()
 
@@ -229,6 +235,7 @@ def reset_annotation_tasks(project_id):
             task.label_source = None
             task.updated_at = datetime.utcnow()
 
+        reset_loops(tasks)
         db.session.commit()
         return jsonify({"success": True, "message": f"Reset {len(tasks)} annotation tasks", "reset_count": len(tasks)}), 200
 

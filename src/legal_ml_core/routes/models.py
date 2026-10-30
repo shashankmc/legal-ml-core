@@ -1091,11 +1091,12 @@ def _lock_model_and_find_active_job(model_id, owner_id):
             return model, active
 
 
-def start_training_job(owner_id, model_id, data):
+def start_training_job(owner_id, model_id, data, al_round_id=None):
     """The one way a training run starts; both start routes call it. Returns
     (response body, status). Starting a model with an active job returns that
     job, and a run that cannot be queued leaves a failed job, never a pending
-    one nothing will pick up."""
+    one nothing will pick up. ``al_round_id`` ties the run to an active learning
+    round, so the worker rescores the pool after it; it never comes from a body."""
     model, active = _lock_model_and_find_active_job(model_id, owner_id)
     if not model:
         return {"error": "Model not found"}, 404
@@ -1143,6 +1144,8 @@ def start_training_job(owner_id, model_id, data):
             "test_size": data.get("test_size", 0.2),
             "random_state": data.get("random_state", 42),
         }
+        if al_round_id:
+            task_data["al_round_id"] = str(al_round_id)
         current_app.redis_client.lpush(training_queue(), json.dumps(task_data))
     except Exception:
         logger.exception("training job %s (owner %s): could not be queued", job_id, owner_id)

@@ -1,4 +1,5 @@
 """Rescoring the pool on the worker, once a round's model is saved."""
+import json
 import logging
 import os
 from datetime import datetime
@@ -130,6 +131,34 @@ def process_scoring_task(task_info, model_storage_path):
     )
     db.session.commit()
     logger.info("scored %d pool items for round %s", len(tasks), round_row.id)
+
+
+def queue_pool_scoring(task_info, redis_client, scoring_queue):
+    """A round's training finished: hand the pool to the scoring queue. A failure
+    here must not touch the finished training job, so the round takes it."""
+    round_id = task_info["al_round_id"]
+    round_row = db.session.get(ALRound, round_id)
+    if round_row is None or round_row.status != "training":
+        return
+    config = ALConfig.query.filter_by(dataset_id=round_row.dataset_id).first()
+    round_row.status = "scoring"
+    db.session.commit()
+    try:
+        redis_client.lpush(
+            scoring_queue,
+            json.dumps(
+                {
+                    "round_id": str(round_id),
+                    "dataset_id": str(round_row.dataset_id),
+                    "model_id": str(task_info["model_id"]),
+                    "model_type": task_info["model_type"],
+                    "strategy": config.strategy,
+                }
+            ),
+        )
+    except Exception as e:
+        logger.warning("round %s: scoring could not be queued: %s", round_id, e)
+        fail_scoring_round(round_id)
 
 
 def fail_scoring_round(round_id):

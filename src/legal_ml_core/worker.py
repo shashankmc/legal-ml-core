@@ -166,11 +166,14 @@ def _training_loop(
     liveness=DEFAULT_TIMINGS,
     sleep=time.sleep,
     stop=None,
+    scoring_queue="scoring_queue",
 ):
     def handle(raw):
         task_info = json.loads(raw)
         with app.app_context():
-            process_training_task(task_info, redis_client, model_storage_path, liveness=liveness)
+            process_training_task(
+                task_info, redis_client, model_storage_path, liveness=liveness, scoring_queue=scoring_queue
+            )
 
     _consume(
         redis_client,
@@ -302,7 +305,7 @@ def run_ml_worker(
         app.config["USAGE_METER"] = usage_meter
 
     threads = [
-        threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue, liveness), daemon=True),
+        threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue, liveness), kwargs={"scoring_queue": scoring_queue}, daemon=True),
         threading.Thread(target=_prediction_loop, args=(redis_client, model_storage_path, app, prediction_queue), daemon=True),
         threading.Thread(target=_explanation_loop, args=(redis_client, model_storage_path, app, explanation_queue), daemon=True),
         threading.Thread(target=_llm_loop, args=(redis_client, app, llm_queue), daemon=True),

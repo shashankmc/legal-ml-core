@@ -41,6 +41,7 @@ tags:
   - name: visualization
   - name: annotation
   - name: llm
+  - name: active-learning
 
 paths:
   # ---------------------------------------------------------------- datasets
@@ -959,6 +960,69 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   # -------------------------------------------------------------- annotation
+  /api/active-learning/settings:
+    get:
+      tags: [active-learning]
+      summary: Host's allowed query strategies, default strategy and batch size.
+      responses:
+        "200": {description: Settings}
+  /api/active-learning/datasets/{dataset_id}:
+    parameters:
+      - {name: dataset_id, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [active-learning]
+      summary: A dataset's loop state, or active false if it has not started.
+      responses:
+        "200": {description: Loop state}
+        "404": {description: Not found or not yours}
+  /api/active-learning/datasets/{dataset_id}/start:
+    parameters:
+      - {name: dataset_id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [active-learning]
+      summary: Start the loop. Draws the holdout and shuffles the seed batch.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy: {type: string}
+                batch_size: {type: integer}
+                min_per_class: {type: integer}
+                holdout_percent: {type: integer, description: "0 turns the holdout off"}
+                seed_source: {type: string, enum: [random, llm]}
+      responses:
+        "201": {description: Started}
+        "400": {description: Not text classification, or nothing to label}
+        "409": {description: Already started}
+  /api/active-learning/datasets/{dataset_id}/strategy:
+    parameters:
+      - {name: dataset_id, in: path, required: true, schema: {type: string}}
+    put:
+      tags: [active-learning]
+      summary: Change the query strategy for the next rescore.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy: {type: string}
+      responses:
+        "200": {description: Changed}
+        "400": {description: Not an allowed strategy}
+  /api/active-learning/datasets/{dataset_id}/retrain:
+    parameters:
+      - {name: dataset_id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [active-learning]
+      summary: Retrain on confirmed labels, then the worker rescores the pool.
+      responses:
+        "200": {description: Training already running}
+        "202": {description: Training started}
+        "409": {description: No new labels, or a class is short of labels}
+        "503": {description: Could not be queued}
   /api/annotation/projects/{project_id}/queue/next:
     parameters:
       - $ref: "#/components/parameters/ProjectId"

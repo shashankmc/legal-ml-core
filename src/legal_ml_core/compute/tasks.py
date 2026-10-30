@@ -7,6 +7,7 @@ import joblib
 import pandas as pd
 import redis as redis_lib
 
+from ..active_learning.scoring import queue_pool_scoring
 from ..annotation_queue import apply_saved_annotations
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
@@ -103,6 +104,7 @@ def process_training_task(
     trainer_factory=MLModelTrainer,
     liveness=DEFAULT_TIMINGS,
     heartbeat_factory=Heartbeat,
+    scoring_queue="scoring_queue",
 ):
     """Runs one training task. Must be called with a Flask app context pushed
     (db.session/Model.query need it) — see legal_ml_core.worker.run_ml_worker.
@@ -250,6 +252,9 @@ def process_training_task(
             }
         )
         logger.info("training job %s: completed model %s", job_id, model_id)
+
+        if task_info.get("al_round_id"):
+            queue_pool_scoring(task_info, redis_client, scoring_queue)
 
     except Exception as e:
         db.session.rollback()
