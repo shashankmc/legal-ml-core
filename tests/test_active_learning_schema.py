@@ -12,22 +12,23 @@ from legal_ml_core import ALConfig, ALRound, AnnotationTask, Dataset, db
 from tests.conftest import TEST_USER_ID
 
 VERSIONS = Path(legal_ml_core.__file__).parent / "migrations" / "versions"
+ADDED_LATER = {"holdout_file_counts"}
 
 
-def _migration():
-    spec = importlib.util.spec_from_file_location("al_migration", VERSIONS / "0003_active_learning.py")
+def _migration(name="0003_active_learning.py"):
+    spec = importlib.util.spec_from_file_location("al_migration", VERSIONS / name)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def _upgrade_sql():
+def _upgrade_sql(name="0003_active_learning.py"):
     output = io.StringIO()
     context = MigrationContext.configure(
         dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output}
     )
     with Operations.context(context):
-        _migration().upgrade()
+        _migration(name).upgrade()
     return output.getvalue()
 
 
@@ -51,7 +52,13 @@ def test_migration_creates_every_mapped_column():
     for model in (ALConfig, ALRound):
         table = sql.split(f"CREATE TABLE {model.__tablename__} (")[1].split(";")[0]
         for column in model.__table__.columns:
+            if column.name in ADDED_LATER:
+                continue
             assert re.search(rf"\b{column.name} [A-Z]", table), f"{model.__tablename__}.{column.name}"
+
+
+def test_a_later_migration_adds_the_holdout_file_counts():
+    assert "ALTER TABLE al_configs ADD COLUMN holdout_file_counts JSON" in _upgrade_sql("0004_holdout_file_counts.py")
 
 
 def test_tasks_start_outside_the_holdout_with_no_score(app):

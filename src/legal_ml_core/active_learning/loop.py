@@ -140,24 +140,59 @@ def _rows_the_llm_touched(dataset_id):
     return {row.item_index for row in rows}
 
 
+def _labels_so_far(df, dataset):
+    """Row position to label, for every row with a label from the file or saved."""
+    labels = {int(row): str(value) for row, value in file_labels(df, dataset).items()}
+    saved = AnnotationTask.query.filter_by(dataset_id=dataset.id, status="annotated")
+    labels.update({task.item_index: task.annotation_label for task in saved})
+    return labels
+
+
+def _shares(sizes, total):
+    """``total`` split across ``sizes`` by largest remainder, so it adds up. The
+    rows beyond the whole shares go to the largest remainders, a group of one
+    last: with no second example, it cannot train if it is held back."""
+    grand_total = sum(sizes.values())
+    exact = {key: size * total / grand_total for key, size in sizes.items()}
+    shares = {key: int(value) for key, value in exact.items()}
+    by_claim = sorted(sizes, key=lambda key: (sizes[key] == 1, shares[key] - exact[key]))
+    for key in by_claim[: total - sum(shares.values())]:
+        shares[key] += 1
+    return shares
+
+
 def _draw_holdout(df, dataset, percent, seed):
-    """Row positions held back: a random share of all rows with text, drawn from
-    those no LLM touched. That can hold fewer rows than the share, or none."""
+    """Row positions held back: a share of all rows with text, drawn from those no
+    LLM touched, so it can hold fewer rows than the share, or none. Each class that
+    has labels keeps its share of the draw, and unlabelled rows stay random."""
     rows = rows_with_text(df, dataset)
     size = int(round(len(rows) * percent / 100))
     if percent:
         size = max(size, 1)
     touched = _rows_the_llm_touched(dataset.id)
-    eligible = [row for row in rows if row not in touched]
-    drawn = np.random.default_rng(seed).choice(eligible, size=min(size, len(eligible)), replace=False)
+    labels = _labels_so_far(df, dataset)
+    groups = {}
+    for row in rows:
+        if row not in touched:
+            groups.setdefault(labels.get(row), []).append(row)
+    if not groups:
+        return []
+
+    rng = np.random.default_rng(seed)
+    size = min(size, sum(len(group) for group in groups.values()))
+    shares = _shares({key: len(group) for key, group in groups.items()}, size)
+    drawn = [
+        position
+        for key, group in groups.items()
+        for position in rng.choice(group, size=shares[key], replace=False)
+    ]
     return sorted(int(position) for position in drawn)
 
 
-def _file_label_counts(df, dataset, holdout):
-    """Per class, the labels the file gave outside the holdout: they train with
-    the rest."""
+def _file_label_counts(df, dataset, rows, held_back):
+    """Per class, the labels the file gave ``rows`` in or out of the holdout."""
     labels = file_labels(df, dataset)
-    labels = labels[~labels.index.isin(holdout)]
+    labels = labels[labels.index.isin(rows) == held_back]
     return {str(k): int(v) for k, v in labels.value_counts().items()}
 
 
@@ -215,7 +250,8 @@ def start_loop(dataset, options):
         random_seed=seed,
         holdout_percent=holdout_percent,
         holdout_indices=holdout,
-        file_label_counts=_file_label_counts(df, dataset, holdout),
+        file_label_counts=_file_label_counts(df, dataset, holdout, held_back=False),
+        holdout_file_counts=_file_label_counts(df, dataset, holdout, held_back=True),
     )
     db.session.add(config)
     _shuffle_pool(tasks, seed)
@@ -426,12 +462,29 @@ def _holdout_needed(config):
     return min(MIN_HOLDOUT_LABELS, len(config.holdout_indices or []))
 
 
+def _holdout_label_counts(config):
+    """Per class, the held-back labels that could grade a Model."""
+    rows = (
+        db.session.query(AnnotationTask.annotation_label, db.func.count())
+        .filter(
+            AnnotationTask.dataset_id == config.dataset_id,
+            AnnotationTask.is_holdout.is_(True),
+            AnnotationTask.status == "annotated",
+            db.or_(AnnotationTask.label_source.is_(None), AnnotationTask.label_source.notin_(LLM_LABEL_SOURCES)),
+        )
+        .group_by(AnnotationTask.annotation_label)
+        .all()
+    )
+    return dict(Counter(dict(rows)) + Counter(config.holdout_file_counts or {}))
+
+
 def _holdout_state(config):
     model = db.session.get(Model, config.model_id) if config.model_id else None
     return {
         "percent": config.holdout_percent,
         "size": len(config.holdout_indices or []),
         "labelled": _holdout_labelled(config),
+        "label_counts": _holdout_label_counts(config),
         "needed": _holdout_needed(config),
         "verification": ((model.metrics or {}) if model else {}).get("verification"),
     }

@@ -282,6 +282,7 @@ class ALConfig(MLBase):
     holdout_percent = db.Column(db.Integer, default=20, nullable=False)  # 0 turns it off
     holdout_indices = db.Column(db.JSON)
     file_label_counts = db.Column(db.JSON)  # per class, labels the file gave the pool
+    holdout_file_counts = db.Column(db.JSON)  # per class, labels the file gave the holdout
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
