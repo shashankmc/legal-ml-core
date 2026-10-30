@@ -8,6 +8,34 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every earlier release ignored the parameters chosen for a Model.** The worker
+  handed the trainer the queue message, where the choices sit one level down under
+  `parameters`, so classifiers, clustering, topic models and transformers all
+  trained on defaults while `Model.parameters` showed the choice. This predates
+  v0.2.0 and affects every release up to and including v0.5.0. Models trained so far
+  used defaults and keep them until retrained: retraining applies their saved
+  choices, so scores, cluster counts and training time may change.
+- A balanced model keeps its benefit. Sigmoid calibration refitted its scores to the
+  unweighted label frequencies and undid it, so `class_weight: balanced` now skips
+  calibration and reports `probabilities_calibrated: false`.
+- `GET /api/training/batch-prediction/<id>` answers `status: pending` from the moment
+  a batch is queued, not 404 until the result arrives.
+- `max_depth: null`, the wizard's default for unlimited depth, is accepted.
+- `penalty: elasticnet` mixes both penalties, through a new `l1_ratio` parameter
+  (default 0.5). scikit-learn 1.8 and later otherwise fit it as plain l2.
+- An NMF `alpha` strong enough to remove every topic fails with a reason.
+
+### Changed
+
+- Parameters that cannot train are refused with a 400 when a Model is created, when
+  it is edited and when training starts, including Models already saved with them:
+  `l1` without `liblinear` or `saga`, `elasticnet` without `saga`, and `ward` linkage
+  without `euclidean` or `l2`.
+- `lex_glue` is no longer a LegalBERT variant: no such model exists to download.
+- UK spelling in the model catalogue.
+
 ## [0.5.0] - 2026-10-30
 
 ### Added
