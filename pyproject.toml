@@ -52,6 +52,7 @@ test = [
     "pytest-cov>=4.1",
     "fakeredis>=2.20",
     "PyYAML>=6.0",  # tests/test_openapi.py reads docs/openapi.yaml
+    "alembic>=1.13",  # tests build the migrations; hosts supply it at runtime
 ]
 
 [tool.setuptools.packages.find]
