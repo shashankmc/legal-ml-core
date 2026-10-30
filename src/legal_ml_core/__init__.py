@@ -13,12 +13,18 @@ from .db import MLBase, db, get_db, set_active_db
 from .models import (
     AnnotationTask,
     Dataset,
+    LLMAcknowledgement,
+    LLMCredential,
+    LLMPrompt,
+    LLMSuggestion,
+    LLMUsage,
     MLProject,
     Model,
     ModelComparison,
     TrainingJob,
     TrainingMetricPoint,
 )
+from .llm import DBUsageMeter, UsageMeter, purge_owner_llm_data
 from .ownership import (
     HostModelOwnerRef,
     KeycloakOwnerRef,
@@ -54,4 +60,12 @@ __all__ = [
     "ModelComparison",
     "AnnotationTask",
     "TrainingMetricPoint",
+    "LLMAcknowledgement",
+    "LLMCredential",
+    "LLMPrompt",
+    "LLMSuggestion",
+    "LLMUsage",
+    "DBUsageMeter",
+    "UsageMeter",
+    "purge_owner_llm_data",
 ]

@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
   title: legal-ml-core HTTP API
-  version: 0.2.0
+  version: 0.3.0
   summary: Routes registered on a host Flask app by legal_ml_core.init_ml_feature.
   description: |
     Every route below is registered by `init_ml_feature(app, ...)`. Paths are
     shown with the default prefixes (`/api/datasets`, `/api/models`,
-    `/api/training`, `/api/visualization`, `/api` for EDA and
-    `/api/annotation`). `tests/test_openapi.py` fails if a registered route or
+    `/api/training`, `/api/visualization`, `/api` for EDA,
+    `/api/annotation` and `/api/llm`). `tests/test_openapi.py` fails if a registered route or
     method is missing from this file, or if this file describes one that does
     not exist.
 
@@ -40,6 +40,7 @@ tags:
   - name: training
   - name: visualization
   - name: annotation
+  - name: llm
 
 paths:
   # ---------------------------------------------------------------- datasets
@@ -1106,6 +1107,242 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/llm/status:
+    get:
+      tags: [llm]
+      summary: Current LLM access, destination and remaining tokens
+      operationId: getLlmStatus
+      parameters:
+        - { name: dataset_id, in: query, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: The LLM service failed }
+  /api/llm/key:
+    put:
+      tags: [llm]
+      summary: Save the caller's own key (write-only, encrypted at rest)
+      operationId: saveLlmKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [api_key, base_url, model]
+              properties:
+                api_key: { type: string }
+                base_url: { type: string, description: Public https URL }
+                model: { type: string }
+      responses:
+        "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [llm]
+      summary: Delete the caller's own key
+      operationId: deleteLlmKey
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/llm/datasets/{dataset_id}/acknowledgement:
+    parameters:
+      - { name: dataset_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [llm]
+      summary: Acknowledge that this project's text goes to the named destination
+      operationId: acknowledgeLlmDestination
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination]
+              properties:
+                destination: { type: string }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Acknowledgement required or destination changed }
+  /api/llm/datasets/{dataset_id}/prompt:
+    parameters:
+      - { name: dataset_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [llm]
+      summary: Current prompt (version 0 is the unedited default)
+      operationId: getLlmPrompt
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [llm]
+      summary: Check and save a new prompt version
+      operationId: updateLlmPrompt
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [template]
+              properties:
+                template: { type: string, description: 'Must contain the labels and text slots once each' }
+                definitions: { type: object, additionalProperties: { type: string } }
+      responses:
+        "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Acknowledgement required or destination changed }
+        "429": { description: Monthly limit reached }
+        "502": { description: The LLM service failed }
+  /api/llm/datasets/{dataset_id}/suggestions:
+    parameters:
+      - { name: dataset_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [llm]
+      summary: List suggestions
+      operationId: listLlmSuggestions
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [llm]
+      summary: Generate suggestions for a current batch
+      operationId: createLlmSuggestions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_ids]
+              properties:
+                task_ids: { type: array, items: { type: string } }
+      responses:
+        "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Acknowledgement required or destination changed }
+        "429": { description: Monthly limit reached }
+        "502": { description: The LLM service failed }
+  /api/llm/suggestions/{suggestion_id}/confirm:
+    parameters:
+      - { name: suggestion_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [llm]
+      summary: Accept a suggestion, or correct it by sending a label
+      operationId: confirmLlmSuggestion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string }
+      responses:
+        "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/llm/suggestions/{suggestion_id}/reject:
+    parameters:
+      - { name: suggestion_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [llm]
+      summary: Reject a suggestion
+      operationId: rejectLlmSuggestion
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/llm/datasets/{dataset_id}/agreement:
+    parameters:
+      - { name: dataset_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [llm]
+      summary: Agreement of the latest model and prompt with human decisions
+      operationId: getLlmAgreement
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/llm/datasets/{dataset_id}/bulk-accept:
+    parameters:
+      - { name: dataset_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [llm]
+      summary: Accept pending suggestions once the agreement check passes
+      operationId: bulkAcceptLlmSuggestions
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/llm/datasets/{dataset_id}/annotate/estimate:
+    parameters:
+      - { name: dataset_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [llm]
+      summary: Estimate tokens for a standalone annotation job
+      operationId: estimateLlmAnnotation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task_ids: { type: array, items: { type: string } }
+      responses:
+        "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: The LLM service failed }
+  /api/llm/datasets/{dataset_id}/annotate:
+    parameters:
+      - { name: dataset_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [llm]
+      summary: Start a standalone annotation job on the worker
+      operationId: startLlmAnnotation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm_estimate]
+              properties:
+                task_ids: { type: array, items: { type: string } }
+                confirm_estimate: { type: boolean }
+      responses:
+        "202": { description: Job queued }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Acknowledgement required or destination changed }
+        "429": { description: Monthly limit reached }
+        "502": { description: The LLM service failed }
+  /api/llm/jobs/{job_id}:
+    parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [llm]
+      summary: Status of a standalone annotation job
+      operationId: getLlmJob
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     bearerAuth:

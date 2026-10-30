@@ -6,10 +6,11 @@ make the previously-implicit dict shapes explicit, not to add a new
 validation layer that could reject payloads the working code already handles.
 
 Queue names (Redis lists, `LPUSH`/`BRPOP`):
-  training_queue, prediction_queue, explanation_queue
+  training_queue, prediction_queue, explanation_queue, llm_queue
 
 Result keys (Redis strings/lists, `SETEX`/`LPUSH` + `GET`/`BLPOP`):
-  job_status_{job_id}, prediction_result_{prediction_id}, explanation_{explanation_id}
+  job_status_{job_id}, prediction_result_{prediction_id}, explanation_{explanation_id},
+  llm_job_status_{job_id}
 
 Control keys (Redis strings, `SETEX` by the API, `EXISTS` by the worker):
   job_cancel_{job_id} -- set by POST /training/stop/<job_id>; the worker checks
@@ -34,6 +35,7 @@ JOB_STATUS_TTL_SECONDS = 3600
 
 PREDICTION_RESULT_TTL_SECONDS = 300
 EXPLANATION_RESULT_TTL_SECONDS = 3600
+LLM_JOB_STATUS_TTL_SECONDS = 24 * 3600
 
 WORKER_LIVENESS_KEY = "legal_ml_worker_alive"
 
@@ -56,6 +58,10 @@ def prediction_result_key(prediction_id):
 
 def explanation_result_key(explanation_id):
     return f"explanation_{explanation_id}"
+
+
+def llm_job_status_key(job_id):
+    return f"llm_job_status_{job_id}"
 
 
 def is_cancel_requested(redis_client, job_id):
@@ -111,4 +117,25 @@ class ExplanationResult(TypedDict, total=False):
     method: str
     model_id: str
     status: str
+    error: str
+
+
+class LLMAnnotationTaskPayload(TypedDict):
+    """Carries the credential *mode*, never a key: the worker reads keys from
+    the database or its own environment, so none pass through Redis."""
+
+    job_id: str
+    dataset_id: str
+    owner_id: str
+    mode: str  # "shared" | "byok"
+    task_ids: List[str]
+
+
+class LLMJobStatus(TypedDict, total=False):
+    owner_id: str
+    status: str  # "queued" | "running" | "completed" | "failed" | "budget_exhausted"
+    total: int
+    done: int
+    created: int
+    invalid: int
     error: str

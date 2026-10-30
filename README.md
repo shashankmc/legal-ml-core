@@ -22,12 +22,53 @@ representations of the same database schema).
 - Experiment monitoring: per-training-job metric time series (dense for the
   HuggingFace Trainer path, coarse phase markers for classical sklearn
   algorithms) and cross-run hyperparameter-vs-performance comparison
+- LLM annotation: suggestions for a batch or a whole dataset, through one
+  OpenAI-compatible adapter, with a host-gated shared key or a user's own key
 - Pluggable ownership: opaque `owner_id` scoped by a Keycloak subject, a host
   resolver, or nothing (single-tenant) — no local user table required
 
 Out of scope (stays in the host app): auth, generic project CRUD, and the
 unrelated "learning platform" tutorials feature (including its sandboxed
 code-execution/package-installation queues).
+
+## LLM annotation
+
+Everything under `/api/llm` is described in `docs/openapi.yaml`. Suggestions never
+become labels by themselves: a human confirms them, or bulk-accepts after an
+agreement check. Single-label classification only.
+
+The package holds no policy. A host configures:
+
+```python
+app.config["FEATURE_GATE"] = lambda feature, claims: my_policy(feature, claims)
+app.config["LLM_SHARED_ENDPOINT"] = {
+    "base_url": "https://openrouter.ai/api/v1",
+    "api_key": os.environ["OPENROUTER_API_KEY"],
+    "model": "...",
+    "destination": "OpenRouter",  # shown to users before their text is sent
+    "extra_body": {"provider": {"zdr": True, "data_collection": "deny"}},
+}
+app.config["LLM_ENCRYPTION_KEY"] = os.environ["LLM_ENCRYPTION_KEY"]  # Fernet key
+```
+
+- The shared key needs a token whose `email_verified` is `true` **and** a gate that
+  says yes. Without a `FEATURE_GATE`, nobody gets it. In `AUTH_MODE="platform"` the
+  host must put `email_verified` in the tokens it signs.
+- For llama.cpp or vLLM, point `base_url` at the server and drop `extra_body`. The
+  endpoint counts as configured only with an `api_key`, so use any non-empty value
+  for a server without auth.
+- The worker reads the same settings from the environment: `LLM_SHARED_BASE_URL`,
+  `LLM_SHARED_API_KEY`, `LLM_SHARED_MODEL`, `LLM_SHARED_DESTINATION`,
+  `LLM_SHARED_EXTRA_BODY` (JSON) and `LLM_ENCRYPTION_KEY`.
+- `USAGE_METER` replaces the default DB counter (`LLM_MONTHLY_TOKEN_CAP`, default
+  200000). Pass the same kind to `run_ml_worker(usage_meter=...)`.
+- `LLM_BYOK_ALLOWED_HOSTS` limits where users' keys may go. Unset, any public https
+  host is allowed.
+- Call `purge_owner_llm_data(owner_id)` from account erasure.
+- `LLM_AUDIT_HOOK`, a callable `(event, owner_id, **fields)`, receives each new
+  acknowledgement for the host's audit log.
+
+Other settings and defaults are in `llm/config.py`.
 
 ## Installing into a host Flask app
 
@@ -203,7 +244,7 @@ citation metadata is in [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this
 repository" button reads it); [`codemeta.json`](codemeta.json) carries the
 same metadata in CodeMeta form.
 
-> Chakravarthy, S. (2026). *legal-ml-core* (Version 0.2.0) [Computer
+> Chakravarthy, S. (2026). *legal-ml-core* (Version 0.3.0) [Computer
 > software]. Maastricht University. https://github.com/shashankmc/legal-ml-core
 
 **DOI:** not yet assigned. Once the repository is connected to Zenodo, each

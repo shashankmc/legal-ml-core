@@ -128,6 +128,7 @@ def save_annotation(task_id):
             task.annotation_label = str(annotation_label)
 
         task.status = "annotated"
+        task.label_source = "human"
         task.updated_at = datetime.utcnow()
         dataset.updated_at = datetime.utcnow()
         db.session.commit()
@@ -214,6 +215,7 @@ def reset_annotation_tasks(project_id):
         for task in tasks:
             task.status = "pending"
             task.annotation_label = None
+            task.label_source = None
             task.updated_at = datetime.utcnow()
 
         db.session.commit()

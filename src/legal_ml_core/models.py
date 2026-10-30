@@ -213,9 +213,14 @@ class AnnotationTask(MLBase):
     status = db.Column(
         db.String(50), default="pending"
     )  # 'pending', 'annotated', 'skipped'
+    label_source = db.Column(db.String(20))  # 'human', 'llm_confirmed', 'llm_bulk'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    suggestions = db.relationship(
+        "LLMSuggestion", backref="task", lazy=True, cascade="all, delete-orphan"
     )
 
     # Unique constraint on dataset_id and item_index
@@ -231,9 +236,138 @@ class AnnotationTask(MLBase):
             "text": self.text,
             "annotation_label": self.annotation_label,
             "status": self.status,
+            "label_source": self.label_source,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
+
+
+class LLMCredential(MLBase):
+    """A user's own LLM key (BYOK). ``encrypted_key`` is Fernet ciphertext."""
+
+    __tablename__ = "llm_credentials"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id = db.Column(db.String(255), nullable=False, unique=True)
+    encrypted_key = db.Column(db.Text, nullable=False)
+    base_url = db.Column(db.String(500), nullable=False)
+    model = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class LLMAcknowledgement(MLBase):
+    """Records that an owner accepted sending a scope's text to a destination.
+
+    ``scope_id`` is the dataset's project, or the dataset itself when it has none.
+    """
+
+    __tablename__ = "llm_acknowledgements"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id = db.Column(db.String(255), nullable=False)
+    scope_id = db.Column(db.String(255), nullable=False)
+    destination = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "owner_id", "scope_id", "destination", name="uq_llm_acknowledgement"
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            "destination": self.destination,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class LLMPrompt(MLBase):
+    """One version of a dataset's labelling prompt. Versions are never edited."""
+
+    __tablename__ = "llm_prompts"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    dataset_id = db.Column(
+        db.String(36), db.ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    version = db.Column(db.Integer, nullable=False)
+    template = db.Column(db.Text, nullable=False)
+    definitions = db.Column(db.JSON)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint("dataset_id", "version", name="uq_llm_prompt_version"),
+    )
+
+    def to_dict(self):
+        return {
+            "version": self.version,
+            "template": self.template,
+            "definitions": self.definitions or {},
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class LLMSuggestion(MLBase):
+    """An LLM's proposed label. It is not a label until a human accepts it."""
+
+    __tablename__ = "llm_suggestions"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    task_id = db.Column(
+        db.String(36),
+        db.ForeignKey("annotation_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    model = db.Column(db.String(255), nullable=False)
+    prompt_version = db.Column(db.Integer, nullable=False)
+    label = db.Column(db.String(1000), nullable=False)
+    rationale = db.Column(db.Text)
+    status = db.Column(
+        db.String(20), default="pending", nullable=False
+    )  # 'pending', 'accepted', 'corrected', 'rejected', 'bulk_accepted'
+    bulk_agreement = db.Column(db.JSON)  # the agreement check that unlocked bulk accept
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "task_id", "model", "prompt_version", name="uq_llm_suggestion"
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
+            "label": self.label,
+            "rationale": self.rationale,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class LLMUsage(MLBase):
+    """Shared-key tokens per owner per month, for the default usage meter."""
+
+    __tablename__ = "llm_usage"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id = db.Column(db.String(255), nullable=False)
+    period = db.Column(db.String(7), nullable=False)  # 'YYYY-MM'
+    tokens = db.Column(db.Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint("owner_id", "period", name="uq_llm_usage_period"),
+    )
 
 
 class TrainingMetricPoint(MLBase):

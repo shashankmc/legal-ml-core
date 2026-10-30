@@ -8,8 +8,21 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-30
+
 ### Added
 
+- LLM annotation under `/api/llm`: suggestions for a batch, standalone annotation
+  jobs on the worker (new `llm_queue`), agreement check and bulk accept. One
+  OpenAI-compatible adapter. Suggestions become labels only through a human or a
+  passed agreement check.
+- Access: host-injected `FEATURE_GATE` (fails closed without `email_verified`),
+  encrypted user keys (BYOK), per-project acknowledgement of the LLM destination,
+  and `LLM_AUDIT_HOOK`.
+- `USAGE_METER` seam with a default per-month DB counter, and
+  `run_ml_worker(usage_meter=...)`.
+- `purge_owner_llm_data` for hosts' account erasure.
+- `label_source` on annotation tasks. Migration `lmc_0002_llm`.
 - FAIR4RS metadata: `LICENSE` (MIT), `CITATION.cff`, `codemeta.json` and
   `.zenodo.json`, plus a "How to cite" section in the README.
 - `CHANGELOG.md` and `CONTRIBUTING.md`.
@@ -98,6 +111,7 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shashankmc/legal-ml-core/compare/02c5b61...v0.2.0
 [0.1.0]: https://github.com/shashankmc/legal-ml-core/commits/02c5b61

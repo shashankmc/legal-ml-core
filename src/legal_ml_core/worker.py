@@ -1,4 +1,4 @@
-"""Worker entrypoint: consumes the training/prediction/explanation Redis queues.
+"""Worker entrypoint: consumes the training/prediction/explanation/LLM Redis queues.
 
 Runs as its own process (typically its own Docker container), sharing no
 Python objects with the Flask API process, but importing the exact same
@@ -27,6 +27,7 @@ from .db import db, get_db, set_active_db
 from .compute.tasks import REDIS_DOWN_ERRORS
 from .job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from .liveness import DEFAULT_TIMINGS, start_worker_liveness
+from .llm.suggest import fail_llm_job, process_llm_annotation_task
 from .queue_contract import (
     EXPLANATION_RESULT_TTL_SECONDS,
     JOB_STATUS_TTL_SECONDS,
@@ -233,6 +234,20 @@ def _explanation_loop(
     _consume(redis_client, explanation_queue, handle, on_error, "explanation", sleep=sleep, stop=stop)
 
 
+def _llm_loop(redis_client, app, llm_queue="llm_queue", sleep=time.sleep, stop=None):
+    def handle(raw):
+        task_info = json.loads(raw)
+        with app.app_context():
+            process_llm_annotation_task(task_info, redis_client)
+
+    def on_error(raw, exc):
+        with app.app_context():
+            db.session.rollback()
+            fail_llm_job(raw, redis_client)
+
+    _consume(redis_client, llm_queue, handle, on_error, "llm", sleep=sleep, stop=stop)
+
+
 def run_ml_worker(
     redis_url,
     database_url,
@@ -242,6 +257,8 @@ def run_ml_worker(
     prediction_queue="prediction_queue",
     explanation_queue="explanation_queue",
     liveness=DEFAULT_TIMINGS,
+    llm_queue="llm_queue",
+    usage_meter=None,
 ):
     """Starts the training/prediction/explanation queue-consumer threads.
 
@@ -252,17 +269,25 @@ def run_ml_worker(
     `liveness` (LivenessTimings) sets the heartbeat interval (15s), the stale
     window (120s) and the job-status TTL (3600s). The API's sweep reads its
     stale window from `LEGAL_ML_HEARTBEAT_STALE_SECONDS`; keep the two equal.
+
+    `usage_meter` meters shared-key tokens for batch LLM jobs, and must be the
+    same kind the API uses (the API's `USAGE_METER`). It defaults to the DB
+    counter. The shared endpoint and encryption key come from the environment
+    (see llm/config.py).
     """
     # No-op when the host already configured logging; otherwise the worker's
     # startup and job lines go to stderr like the print()s they replaced.
     logging.basicConfig(level=logging.INFO)
     redis_client = _connect_redis(redis_url)
     app = _build_worker_app(database_url)
+    if usage_meter is not None:
+        app.config["USAGE_METER"] = usage_meter
 
     threads = [
         threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue, liveness), daemon=True),
         threading.Thread(target=_prediction_loop, args=(redis_client, model_storage_path, app, prediction_queue), daemon=True),
         threading.Thread(target=_explanation_loop, args=(redis_client, model_storage_path, app, explanation_queue), daemon=True),
+        threading.Thread(target=_llm_loop, args=(redis_client, app, llm_queue), daemon=True),
     ]
     for t in threads:
         t.start()
@@ -270,7 +295,7 @@ def run_ml_worker(
     start_worker_liveness(redis_client, liveness)
 
     logger.info(
-        "legal_ml_core worker running (%s, %s, %s)", training_queue, prediction_queue, explanation_queue
+        "legal_ml_core worker running (%s, %s, %s, %s)", training_queue, prediction_queue, explanation_queue, llm_queue
     )
 
     if not block:
