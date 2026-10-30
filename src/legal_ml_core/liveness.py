@@ -27,8 +27,10 @@ from .queue_contract import (
 logger = logging.getLogger(__name__)
 
 STALE_JOB_MESSAGE = (
-    "Training stopped unexpectedly, often because the computer ran out of "
-    "memory. Try a smaller model."
+    "Training stopped before it finished, usually because the computer ran out of "
+    "memory. Your Dataset and labels are safe. Train again. If it stops a second "
+    "time, choose Logistic Regression, which needs the least memory, or use a "
+    "Dataset with fewer rows."
 )
 WORKER_DOWN_MESSAGE = "Waiting: the training service isn't running"
 
