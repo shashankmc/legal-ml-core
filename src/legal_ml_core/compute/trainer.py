@@ -221,11 +221,15 @@ class MLModelTrainer:
         # in a comparable way (naive_bayes is already roughly calibrated), and
         # calibration can fail on tiny/degenerate datasets — so it is best-effort
         # and never blocks training.
+        #
+        # A balanced model skips it: sigmoid calibration refits scores to the
+        # label frequencies of the unweighted data, which puts back the very bias
+        # balancing removed and hands rare labels back to the common ones. Its
+        # probabilities are therefore not calibrated, and the metrics say so.
         calibrated = False
-        proba_params = dict(parameters)
         # Equal-size CalibratedClassifierCV folds need at least 2 samples per class.
         n_classes = len(set(y_train))
-        if self.model is not None and hasattr(self.model, "predict_proba") and n_classes > 1:
+        if class_weight is None and hasattr(self.model, "predict_proba") and n_classes > 1:
             try:
                 self.model = CalibratedClassifierCV(
                     self.model, method="sigmoid", cv=3

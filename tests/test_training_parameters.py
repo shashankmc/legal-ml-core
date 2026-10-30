@@ -2,6 +2,7 @@
 route, queue message and worker. Everything is read off the fitted estimator,
 because the stored parameters always showed the choice, even when it was ignored."""
 import json
+import random
 
 import joblib
 import pandas as pd
@@ -9,7 +10,7 @@ import pytest
 from sklearn.calibration import CalibratedClassifierCV
 
 from legal_ml_core import Dataset, Model, TrainingJob, TrainingMetricPoint, db
-from legal_ml_core.compute.tasks import process_training_task
+from legal_ml_core.compute.tasks import process_prediction_task, process_training_task
 from legal_ml_core.storage import get_model_path
 from tests.conftest import TEST_USER_ID
 
@@ -346,3 +347,92 @@ def test_a_model_saved_with_a_refused_combination_does_not_queue(client, auth_he
     assert "saga" in response.get_json()["error"]
     assert fake_redis.llen("training_queue") == 0
     assert db.session.get(Model, model_id).status == "completed"
+
+
+def _imbalanced(app, tmp_path, shared_words=4):
+    """135 civil cases and 15 criminal ones, in mostly shared vocabulary."""
+    rng = random.Random(7)
+    shared = "court ruled claim party judge appeal order hearing filed tribunal".split()
+    civil = "contract damages lease tenant invoice".split()
+    criminal = "murder assault sentence jury prison".split()
+
+    def document(words):
+        return " ".join(rng.sample(shared, shared_words) + rng.sample(words, 1))
+
+    rows = pd.DataFrame(
+        {
+            "text": [document(civil) for _ in range(135)] + [document(criminal) for _ in range(15)],
+            "label": ["civil"] * 135 + ["criminal"] * 15,
+        }
+    )
+    path = tmp_path / "imbalanced.csv"
+    rows.to_csv(path, index=False)
+    with app.app_context():
+        dataset = Dataset(
+            owner_id=TEST_USER_ID,
+            name="Imbalanced",
+            file_path=str(path),
+            row_count=len(rows),
+            columns=[],
+            task_type="classification",
+        )
+        db.session.add(dataset)
+        db.session.commit()
+        return dataset.id
+
+
+def _criminal_recall(metrics):
+    found, total = metrics["confusion_matrix"][1][1], sum(metrics["confusion_matrix"][1])
+    assert metrics["confusion_matrix_labels"][1] == "criminal"
+    return found / total
+
+
+@pytest.mark.parametrize(
+    "model_type, shared_words",
+    # Fixtures on which calibrating the balanced model loses what it gained.
+    [("decision_tree", 4), ("random_forest", 5)],
+)
+def test_balanced_finds_more_of_the_rare_label_and_keeps_it(
+    client, auth_headers, app, fake_redis, tmp_path, model_type, shared_words
+):
+    dataset_id = _imbalanced(app, tmp_path, shared_words)
+
+    unweighted, _ = _train(
+        client, auth_headers, app, fake_redis, dataset_id, model_type, {"max_depth": 4, "class_weight": "none"}
+    )
+    balanced, _ = _train(
+        client, auth_headers, app, fake_redis, dataset_id, model_type, {"max_depth": 4, "class_weight": "balanced"}
+    )
+
+    before = db.session.get(Model, unweighted).metrics
+    after = db.session.get(Model, balanced).metrics
+    assert _criminal_recall(after) > _criminal_recall(before)
+
+
+def test_a_balanced_model_says_its_probabilities_are_not_calibrated(
+    client, auth_headers, app, fake_redis, tmp_path
+):
+    dataset_id = _imbalanced(app, tmp_path)
+
+    balanced, model = _train(
+        client, auth_headers, app, fake_redis, dataset_id, "logistic_regression", {"class_weight": "balanced"}
+    )
+    unweighted, _ = _train(client, auth_headers, app, fake_redis, dataset_id, "logistic_regression", {})
+
+    assert not isinstance(model, CalibratedClassifierCV)
+    assert db.session.get(Model, balanced).metrics["probabilities_calibrated"] is False
+    assert db.session.get(Model, unweighted).metrics["probabilities_calibrated"] is True
+
+
+def test_a_balanced_model_still_predicts_with_a_confidence(client, auth_headers, app, fake_redis, tmp_path):
+    dataset_id = _imbalanced(app, tmp_path)
+    model_id, _ = _train(
+        client, auth_headers, app, fake_redis, dataset_id, "logistic_regression", {"class_weight": "balanced"}
+    )
+
+    result = process_prediction_task(
+        {"prediction_id": "p", "model_id": model_id, "model_type": "logistic_regression", "texts": ["the jury and the prison"]},
+        app.config["MODEL_FOLDER"],
+    )
+
+    assert set(result["predictions"][0]["all_confidences"]) == {"civil", "criminal"}

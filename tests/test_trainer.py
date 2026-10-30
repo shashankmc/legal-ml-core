@@ -39,7 +39,8 @@ def test_train_classification_model_all_algorithms(fake_redis, classification_df
 
 
 def _fitted_estimator(trainer):
-    return getattr(trainer.model, "estimator", trainer.model)
+    calibrated = getattr(trainer.model, "calibrated_classifiers_", None)
+    return calibrated[0].estimator if calibrated else trainer.model
 
 
 @pytest.mark.parametrize(
