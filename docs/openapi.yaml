@@ -1041,6 +1041,7 @@ paths:
       operationId: nextAnnotationTask
       parameters:
         - { name: dataset, in: query, description: Restrict to one owned dataset., schema: { type: string } }
+        - { name: holdout, in: query, description: "1 serves held-out items, to label them for grading. They are never served otherwise.", schema: { type: string } }
       responses:
         "200":
           description: Next task (null when everything is annotated) and progress
