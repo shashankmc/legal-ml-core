@@ -7,9 +7,10 @@ import joblib
 import pandas as pd
 import redis as redis_lib
 
+from ..annotation_queue import apply_saved_annotations
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
-from ..models import Model, TrainingJob, TrainingMetricPoint
+from ..models import Dataset, Model, TrainingJob, TrainingMetricPoint
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
@@ -161,6 +162,7 @@ def process_training_task(
 
         # Load dataset
         df = pd.read_csv(task_info["dataset_path"])
+        df = apply_saved_annotations(df, db.session.get(Dataset, task_info["dataset_id"]))
 
         # Initialize trainer
         trainer = trainer_factory(

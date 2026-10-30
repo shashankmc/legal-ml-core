@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 from ..db import db
 from ..models import Dataset, AnnotationTask
+from ..annotation_queue import ensure_project_tasks
 from ..db_utils import project_belongs_to_owner
 
 # url_prefix is supplied by init_ml_feature at registration time, alongside the
@@ -43,11 +44,13 @@ def get_next_annotation_task(project_id):
     if dataset_id and not _get_owned_dataset(dataset_id, owner_id):
         return jsonify({"success": False, "error": "Dataset not found"}), 404
 
+    ensure_project_tasks(project_id, owner_id)
+
     tasks = _owned_tasks(project_id, owner_id)
     if dataset_id:
         tasks = tasks.filter(AnnotationTask.dataset_id == dataset_id)
 
-    task = tasks.filter(AnnotationTask.status == "pending").first()
+    task = tasks.filter(AnnotationTask.status == "pending").order_by(AnnotationTask.item_index).first()
     total_tasks = tasks.count()
     annotated_tasks = tasks.filter(AnnotationTask.status == "annotated").count()
 
@@ -59,7 +62,8 @@ def get_next_annotation_task(project_id):
     }
 
     if not task:
-        return jsonify({"success": True, "task": None, "stats": stats, "message": "All items annotated"}), 200
+        message = "All items annotated" if total_tasks else "Nothing to annotate"
+        return jsonify({"success": True, "task": None, "stats": stats, "message": message}), 200
 
     return jsonify({
         "success": True,
@@ -81,6 +85,8 @@ def get_annotation_queue_stats(project_id):
 
     if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
+
+    ensure_project_tasks(project_id, owner_id)
 
     tasks = _owned_tasks(project_id, owner_id)
     total_tasks = tasks.count()
@@ -187,6 +193,8 @@ def list_annotation_tasks(project_id):
 
     if not project_belongs_to_owner(db.session, project_id, owner_id):
         return jsonify({"success": False, "error": "Project not found"}), 404
+
+    ensure_project_tasks(project_id, owner_id)
 
     status = request.args.get("status")
     dataset_id = request.args.get("dataset_id")
