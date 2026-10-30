@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from ..db import db
+from ..active_learning.loop import training_refusal
 from ..models import ALRound, Model, Dataset, TrainingJob
 from ..db_utils import project_belongs_to_owner
 from ..job_state import (
@@ -543,6 +544,11 @@ def create_model():
         ).first()
         if not dataset:
             return jsonify({"error": "Dataset not found"}), 404
+
+        # Creating a Model starts its training, so say so here, not after.
+        refusal = training_refusal(dataset)
+        if refusal:
+            return jsonify({"error": refusal}), 409
 
         # Validate model type
         model_type = data["model_type"]
@@ -1120,6 +1126,11 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
     dataset = db.session.get(Dataset, model.dataset_id)
     if not dataset:
         return {"error": "Dataset not found"}, 404
+
+    refusal = training_refusal(dataset)
+    if refusal:
+        db.session.rollback()  # release the model row lock
+        return {"error": refusal}, 409
 
     # Fail fast, with a reason, if this model cannot train on this dataset.
     ok, compat_error = validate_model_task_compatibility(model.model_type, dataset.task_type)

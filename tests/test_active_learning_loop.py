@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from legal_ml_core import ALRound, TrainingJob, db
+from legal_ml_core import ALRound, Model, TrainingJob, db
 from legal_ml_core.active_learning.loop import validate_host_config
 from legal_ml_core.compute.tasks import process_training_task
 from tests.active_learning_helpers import (
@@ -23,6 +23,7 @@ from tests.active_learning_helpers import (
     state,
     task_for,
 )
+from tests.conftest import TEST_USER_ID
 
 
 def _all(label_value):
@@ -453,3 +454,65 @@ def test_retrain_is_refused_while_the_model_already_trains(client, auth_headers,
     body = state(client, auth_headers, dataset_id)
     assert body["round"]["status"] == "labelling"
     assert body["retrain"]["new_labels"] == 2
+
+
+def _named_label_loop(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(10), dataset_labels=["civil", "criminal"])
+    start(client, auth_headers, dataset_id)
+    return dataset_id
+
+
+def _outside_model(dataset_id):
+    model = Model(
+        owner_id=TEST_USER_ID, dataset_id=dataset_id, name="Mine", model_type="logistic_regression", status="pending"
+    )
+    db.session.add(model)
+    db.session.commit()
+    return model.id
+
+
+def test_train_routes_keep_the_minimum_for_a_dataset_in_a_loop(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _named_label_loop(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, _all("civil"), 5)
+    model_id = _outside_model(dataset_id)
+
+    by_model = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
+    by_start = client.post("/api/training/start", json={"model_id": model_id}, headers=auth_headers)
+
+    for resp in (by_model, by_start):
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "Each label needs at least 5 examples before training."
+    assert fake_redis.llen("training_queue") == 0
+
+
+def test_a_model_cannot_be_created_below_the_minimum(client, auth_headers, app, tmp_path):
+    dataset_id = _named_label_loop(client, auth_headers, app, tmp_path)
+
+    resp = client.post(
+        "/api/models/",
+        json={"name": "Mine", "dataset_id": dataset_id, "model_type": "logistic_regression", "parameters": {}},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == "Each label needs at least 5 examples before training."
+    assert Model.query.filter_by(dataset_id=dataset_id).count() == 0
+
+
+def test_train_routes_open_once_the_minimum_is_met(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _named_label_loop(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, _all("civil"), 5)
+    label_next(client, auth_headers, dataset_id, _all("criminal"), 5)
+
+    resp = client.post(f"/api/models/{_outside_model(dataset_id)}/train", json={}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert fake_redis.llen("training_queue") == 1
+
+
+def test_a_dataset_with_no_loop_trains_as_before(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(10), labels=[by_topic(t) for t in balanced_texts(10)])
+
+    resp = client.post(f"/api/models/{_outside_model(dataset_id)}/train", json={}, headers=auth_headers)
+
+    assert resp.status_code == 200

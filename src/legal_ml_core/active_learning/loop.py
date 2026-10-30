@@ -297,16 +297,35 @@ def _settle_round(round_row):
             fail_scoring_round(round_row.id)
 
 
-def _retrain_state(dataset, config, round_row, counts):
-    trained = sum(counts.values())
-    new_labels = max(trained - _labels_at_last_train(config.dataset_id), 0)
+def _label_shortfall(dataset, config, counts):
+    """``(labels short of the minimum, how short; whether a second label is missing)``."""
     classes = set(dataset.labels or []) | set(counts)
     classes_short = {
         name: config.min_per_class - counts[name]
         for name in sorted(classes)
         if counts[name] < config.min_per_class
     }
-    needs_second_label = len(classes) < 2
+    return classes_short, len(classes) < 2
+
+
+def training_refusal(dataset):
+    """Why this Dataset cannot train yet, else ``None``. Only a Dataset in a loop
+    has a minimum, and it binds every way of starting a run."""
+    config = ALConfig.query.filter_by(dataset_id=str(dataset.id)).first()
+    if config is None:
+        return None
+    classes_short, needs_second_label = _label_shortfall(dataset, config, _confirmed_label_counts(config))
+    if classes_short:
+        return f"Each label needs at least {config.min_per_class} examples before training."
+    if needs_second_label:
+        return "Training needs examples of at least two labels."
+    return None
+
+
+def _retrain_state(dataset, config, round_row, counts):
+    trained = sum(counts.values())
+    new_labels = max(trained - _labels_at_last_train(config.dataset_id), 0)
+    classes_short, needs_second_label = _label_shortfall(dataset, config, counts)
     running = round_row.status in ACTIVE_ROUND_STATUSES
     allowed = new_labels > 0 and not running and not classes_short and not needs_second_label
     return {
@@ -400,10 +419,9 @@ def request_retrain(dataset, owner_id):
     retrain = _retrain_state(dataset, config, round_row, counts)
     if not retrain["new_labels"]:
         raise LoopError("There are no new labels to train on.", 409)
-    if retrain["classes_short"]:
-        raise LoopError(f"Each label needs at least {config.min_per_class} examples before training.", 409)
-    if retrain["needs_second_label"]:
-        raise LoopError("Training needs examples of at least two labels.", 409)
+    refusal = training_refusal(dataset)
+    if refusal:
+        raise LoopError(refusal, 409)
 
     claimed = ALRound.query.filter_by(id=round_row.id, status="labelling").update(
         {"status": "training", "labels_used": sum(counts.values()), "error": None}
