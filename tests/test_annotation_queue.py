@@ -270,3 +270,38 @@ def test_file_without_a_label_column_trains_on_saved_annotations(
 
     assert job.status == "completed"
     assert model.metrics["confusion_matrix_labels"] == ["civil", "criminal"]
+
+
+def test_training_uses_the_annotated_column_not_the_second_one(
+    client, auth_headers, app, fake_redis, tmp_path
+):
+    rows = {"text": _sentences(10), "court": ["Hoge Raad", "Rechtbank"] * 5}
+    dataset_id = _link_dataset(app, tmp_path, rows)
+    for label in ["civil", "criminal"] * 5:
+        task = _next(client, auth_headers)["task"]
+        client.post(
+            f"/api/annotation/tasks/{task['id']}/save",
+            json={"annotation_label": label},
+            headers=auth_headers,
+        )
+
+    model, job = _train(app, fake_redis, dataset_id)
+
+    assert job.status == "completed"
+    assert model.metrics["confusion_matrix_labels"] == ["civil", "criminal"]
+
+
+def test_training_reads_the_text_column_wherever_it_sits(
+    client, auth_headers, app, fake_redis, tmp_path
+):
+    rows = {
+        "court": ["Hoge Raad"] * 10,
+        "text": ["contract breach"] * 5 + ["theft and robbery"] * 5,
+        "label": ["civil"] * 5 + ["criminal"] * 5,
+    }
+    dataset_id = _link_dataset(app, tmp_path, rows)
+
+    model, job = _train(app, fake_redis, dataset_id)
+
+    assert job.status == "completed"
+    assert model.metrics["confusion_matrix_labels"] == ["civil", "criminal"]

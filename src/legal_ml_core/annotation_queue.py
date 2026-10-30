@@ -105,7 +105,10 @@ def ensure_project_tasks(project_id, owner_id):
 
 
 def apply_saved_annotations(df, dataset):
-    """``df`` with saved annotations as labels and still-unlabelled rows dropped."""
+    """``df`` as its text and label columns, in the order the trainer reads them.
+
+    Saved annotations become labels and still-unlabelled rows are dropped.
+    """
     if dataset is None or dataset.task_type not in TRAINED_ON_LABELS:
         return df
 
@@ -120,4 +123,7 @@ def apply_saved_annotations(df, dataset):
         if task.status == "annotated":
             df.loc[task.item_index, label_column] = task.annotation_label
 
-    return df[~_is_blank(df[label_column])].reset_index(drop=True)
+    text_column = _find_column(df, dataset.text_column or "text")
+    if text_column is None:
+        text_column = df.columns[0]
+    return df.loc[~_is_blank(df[label_column]), [text_column, label_column]].reset_index(drop=True)
