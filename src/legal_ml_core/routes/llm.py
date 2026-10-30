@@ -338,7 +338,7 @@ def create_suggestions(dataset_id):
 def list_suggestions(dataset_id):
     dataset = _dataset(dataset_id)
     query = LLMSuggestion.query.join(AnnotationTask).filter(
-        AnnotationTask.dataset_id == dataset.id
+        AnnotationTask.dataset_id == dataset.id, AnnotationTask.is_holdout.is_(False)
     )
     status_filter = request.args.get("status")
     if status_filter:
@@ -365,6 +365,8 @@ def confirm_suggestion(suggestion_id):
     """Accept a suggestion, or pass ``label`` to correct it."""
     suggestion = _owned_suggestion(suggestion_id)
     task = suggestion.task
+    if task.is_holdout:
+        raise ApiError(409, "This item is held back to check the Model, so it can't take a suggestion.")
     label = _body().get("label", suggestion.label)
     if label not in (task.dataset.labels or []):
         raise ApiError(400, "That label isn't one of this dataset's labels.")
@@ -460,6 +462,7 @@ def bulk_accept(dataset_id):
         .filter(
             AnnotationTask.dataset_id == dataset.id,
             AnnotationTask.status == "pending",
+            AnnotationTask.is_holdout.is_(False),
             LLMSuggestion.status == "pending",
             LLMSuggestion.model == check["model"],
             LLMSuggestion.prompt_version == check["prompt_version"],

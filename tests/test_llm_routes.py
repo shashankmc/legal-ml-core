@@ -831,3 +831,44 @@ def test_a_redirect_is_not_followed(client, app, gated, server):
     _ack(client, dataset_id, gated)
     assert _suggest(client, dataset_id, task_ids, gated).status_code == 502
     assert len(server.seen) == 1
+
+
+# Held-out rows
+
+
+def _hold_out(task_ids):
+    AnnotationTask.query.filter(AnnotationTask.id.in_(task_ids)).update(
+        {"is_holdout": True}, synchronize_session=False
+    )
+    db.session.commit()
+
+
+def test_a_suggestion_on_a_held_out_item_cannot_be_confirmed(client, app, gated, provider):
+    suggestion_id, task_id = _one_suggestion(client, app, gated)
+    _hold_out([task_id])
+
+    resp = client.post(f"/api/llm/suggestions/{suggestion_id}/confirm", json={"label": "permission"}, headers=gated)
+
+    assert resp.status_code == 409
+    assert db.session.get(AnnotationTask, task_id).status == "pending"
+
+
+def test_bulk_accept_leaves_held_out_items_alone(client, app, gated, provider):
+    dataset_id, task_ids = _check_items(client, app, gated, total=32, checked=30, wrong=3)
+    _hold_out(task_ids[-1:])
+
+    resp = client.post(f"/api/llm/datasets/{dataset_id}/bulk-accept", headers=gated)
+
+    assert resp.get_json()["accepted"] == 1
+    assert db.session.get(AnnotationTask, task_ids[-1]).status == "pending"
+
+
+def test_suggestions_on_held_out_items_are_not_listed(client, app, gated, provider):
+    dataset_id, task_ids = _dataset(app, tasks=2)
+    _ack(client, dataset_id, gated)
+    _suggest(client, dataset_id, task_ids, gated)
+    _hold_out(task_ids[:1])
+
+    body = client.get(f"/api/llm/datasets/{dataset_id}/suggestions", headers=gated).get_json()
+
+    assert [s["task_id"] for s in body["suggestions"]] == task_ids[1:]

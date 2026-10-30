@@ -1,5 +1,5 @@
 """The holdout: drawn once, never queued or trained on, the source of every metric."""
-from legal_ml_core import ALConfig, ALRound, AnnotationTask, Model, db
+from legal_ml_core import ALConfig, ALRound, AnnotationTask, LLMSuggestion, Model, db
 from tests.active_learning_helpers import (
     PROJECT_ID,
     balanced_texts,
@@ -260,8 +260,6 @@ def test_a_skipped_holdout_item_can_still_be_labelled(client, auth_headers, app,
     first = next_item(client, auth_headers, dataset_id)["task"]
     skipped = client.post(f"/api/annotation/tasks/{first['id']}/skip", headers=auth_headers)
     assert skipped.status_code == 200
-    # The whole file held back would be refused, so skip every row before a draw
-    # that is bound to reach one of them.
     for _ in range(9):
         task = next_item(client, auth_headers, dataset_id)["task"]
         client.post(f"/api/annotation/tasks/{task['id']}/skip", headers=auth_headers)
@@ -274,3 +272,50 @@ def test_a_skipped_holdout_item_can_still_be_labelled(client, auth_headers, app,
     assert body["task"] is None
     assert "holdout_remaining" not in body["stats"]
     assert state(client, auth_headers, dataset_id)["holdout"]["labelled"] == 2
+
+
+def _queued_rows(client, auth_headers, dataset_id):
+    next_item(client, auth_headers, dataset_id)
+    return AnnotationTask.query.filter_by(dataset_id=dataset_id).order_by(AnnotationTask.item_index).all()
+
+
+def test_the_holdout_is_never_drawn_from_rows_the_llm_touched(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(25))
+    tasks = _queued_rows(client, auth_headers, dataset_id)
+    for task in tasks[:20]:
+        task.status, task.annotation_label, task.label_source = "annotated", "civil", "llm_bulk"
+    for task in tasks[20:30]:
+        task.status, task.annotation_label, task.label_source = "annotated", "civil", "llm_confirmed"
+    for task in tasks[30:40]:
+        db.session.add(LLMSuggestion(task_id=task.id, model="m", prompt_version=0, label="civil"))
+    db.session.commit()
+
+    start(client, auth_headers, dataset_id)
+
+    assert sorted(ALConfig.query.filter_by(dataset_id=dataset_id).one().holdout_indices) == list(range(40, 50))
+
+
+def test_a_dataset_the_llm_touched_throughout_holds_nothing_back(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(5))
+    for task in _queued_rows(client, auth_headers, dataset_id):
+        db.session.add(LLMSuggestion(task_id=task.id, model="m", prompt_version=0, label="civil"))
+    db.session.commit()
+
+    assert start(client, auth_headers, dataset_id).status_code == 201
+
+    assert state(client, auth_headers, dataset_id)["holdout"]["size"] == 0
+
+
+def test_only_human_labels_grade_a_model(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    _label_holdout(client, auth_headers, dataset_id, 10)
+    # Reached only by data from before the guards: the check must not trust it.
+    llm_labelled = _holdout_tasks(dataset_id)[0]
+    llm_labelled.label_source = "llm_bulk"
+    db.session.commit()
+
+    assert state(client, auth_headers, dataset_id)["holdout"]["labelled"] == 9
+    _train_round(client, auth_headers, app, fake_redis, dataset_id)
+
+    assert loop_model(dataset_id).metrics["verification"] == "not_independently_verified"
+    assert loop_model(dataset_id).metrics["holdout_labels"] == 9

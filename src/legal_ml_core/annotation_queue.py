@@ -28,6 +28,9 @@ TRAINED_ON_LABELS = {"classification", "document_classification", "judgment_pred
 # trainer reads the summary column, so a summary written there would go nowhere.
 QUEUED_TASK_TYPES = TRAINED_ON_LABELS | {"ner", "named_entity_recognition"}
 
+# Label sources an LLM had a hand in. Holdout metrics rest on human labels only.
+LLM_LABEL_SOURCES = ("llm_confirmed", "llm_bulk")
+
 # Key on the text column's entry in ``Dataset.columns``: how many rows of the file
 # need a label. The host reads it too, so both count what the queue would offer.
 ROWS_TO_LABEL = "rows_to_label"
@@ -93,13 +96,14 @@ def _holdout_of(dataset):
 
 
 def holdout_examples(df, dataset):
-    """``(texts, labels)`` of the labelled held-out rows, for grading a model."""
+    """``(texts, labels)`` of the held-out rows with a human label or one from the
+    file, for grading a model."""
     holdout = _holdout_of(dataset)
     text_column = _find_column(df, dataset.text_column or "text")
     labels = file_labels(df, dataset).astype(object).to_dict()
     texts_by_row = df[text_column].astype(str)
     for task in dataset.annotation_tasks:
-        if task.is_holdout and task.status == "annotated":
+        if task.is_holdout and task.status == "annotated" and task.label_source not in LLM_LABEL_SOURCES:
             labels[task.item_index] = task.annotation_label
     rows = [row for row in holdout if row in labels]
     return [texts_by_row.iloc[row] for row in rows], [str(labels[row]) for row in rows]

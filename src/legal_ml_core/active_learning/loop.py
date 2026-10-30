@@ -10,6 +10,7 @@ import numpy as np
 from flask import current_app
 
 from ..annotation_queue import (
+    LLM_LABEL_SOURCES,
     TRAINED_ON_LABELS,
     create_annotation_tasks,
     file_labels,
@@ -18,7 +19,7 @@ from ..annotation_queue import (
 )
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, sweep_lost_job, sweep_stale_job
-from ..models import ALConfig, ALRound, AnnotationTask, Model, TrainingJob
+from ..models import ALConfig, ALRound, AnnotationTask, LLMSuggestion, Model, TrainingJob
 from .scoring import MIN_HOLDOUT_LABELS, fail_scoring_round, queue_pool_scoring
 from .strategies import DEFAULT_STRATEGY, STRATEGIES, score_pool
 
@@ -113,13 +114,29 @@ def _pool_tasks(dataset_id):
     )
 
 
+def _rows_the_llm_touched(dataset_id):
+    """Rows with a suggestion or an LLM label: neither may reach the holdout."""
+    rows = (
+        db.session.query(AnnotationTask.item_index)
+        .outerjoin(LLMSuggestion, LLMSuggestion.task_id == AnnotationTask.id)
+        .filter(
+            AnnotationTask.dataset_id == dataset_id,
+            db.or_(LLMSuggestion.id.isnot(None), AnnotationTask.label_source.in_(LLM_LABEL_SOURCES)),
+        )
+    )
+    return {row.item_index for row in rows}
+
+
 def _draw_holdout(df, dataset, percent, seed):
-    """Row positions held back: a random share of all rows with text."""
+    """Row positions held back: a random share of all rows with text, drawn from
+    those no LLM touched. That can hold fewer rows than the share, or none."""
     rows = rows_with_text(df, dataset)
     size = int(round(len(rows) * percent / 100))
     if percent:
         size = max(size, 1)
-    drawn = np.random.default_rng(seed).choice(rows, size=size, replace=False)
+    touched = _rows_the_llm_touched(dataset.id)
+    eligible = [row for row in rows if row not in touched]
+    drawn = np.random.default_rng(seed).choice(eligible, size=min(size, len(eligible)), replace=False)
     return sorted(int(position) for position in drawn)
 
 
@@ -324,11 +341,12 @@ def loop_state(dataset):
 
 
 def _holdout_labelled(config):
-    """Rows labelled in the file have no task, so only the unlabelled are counted."""
+    """Rows labelled in the file have no task, so only the unlabelled are counted.
+    An LLM's label does not count: it could not grade the model."""
     unlabelled = AnnotationTask.query.filter(
         AnnotationTask.dataset_id == config.dataset_id,
         AnnotationTask.is_holdout.is_(True),
-        AnnotationTask.status != "annotated",
+        db.or_(AnnotationTask.status != "annotated", AnnotationTask.label_source.in_(LLM_LABEL_SOURCES)),
     ).count()
     return len(config.holdout_indices or []) - unlabelled
 
