@@ -45,7 +45,7 @@ def _is_blank(values):
     return values.isna() | values.astype(str).str.strip().eq("")
 
 
-def _read_rows(file_path):
+def read_rows(file_path):
     if file_path.endswith(".xlsx"):
         return pd.read_excel(file_path)
     if file_path.endswith(".json"):
@@ -68,6 +68,15 @@ def _rows_needing_label(df, dataset):
     if label_column is not None:
         needs_label &= _is_blank(df[label_column])
     return needs_label
+
+
+def file_labels(df, dataset):
+    """The labels ``df`` already holds, as a series keyed by row position."""
+    label_name = dataset.label_column or LABEL_COLUMNS.get(dataset.task_type)
+    label_column = _find_column(df, label_name) if label_name else None
+    if label_column is None:
+        return pd.Series(dtype=object)
+    return df.loc[~_is_blank(df[label_column]), label_column]
 
 
 def record_rows_to_label(dataset, df):
@@ -98,7 +107,7 @@ def create_annotation_tasks(dataset):
         return
 
     try:
-        df = _read_rows(dataset.file_path)
+        df = read_rows(dataset.file_path)
     except Exception as e:
         logger.warning("dataset %s: cannot read rows to annotate: %s", dataset.id, e)
         return

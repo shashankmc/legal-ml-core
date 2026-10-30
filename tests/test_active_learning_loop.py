@@ -17,6 +17,10 @@ from tests.active_learning_helpers import (
 )
 
 
+def _all(label_value):
+    return lambda text: label_value
+
+
 def _started(client, auth_headers, app, tmp_path, pairs=20, **options):
     dataset_id = link_dataset(app, tmp_path, balanced_texts(pairs))
     resp = start(client, auth_headers, dataset_id, **options)
@@ -106,15 +110,15 @@ def test_retrain_with_no_labels_is_refused(client, auth_headers, app, tmp_path):
 
 
 def test_retrain_prompt_appears_once_a_batch_is_labelled(client, auth_headers, app, tmp_path):
-    dataset_id = _started(client, auth_headers, app, tmp_path, batch_size=4)
+    dataset_id = _started(client, auth_headers, app, tmp_path, batch_size=16)
 
-    label_next(client, auth_headers, dataset_id, by_topic, 3)
+    label_next(client, auth_headers, dataset_id, by_topic, 15)
     assert state(client, auth_headers, dataset_id)["retrain"]["suggested"] is False
 
     label_next(client, auth_headers, dataset_id, by_topic, 1)
     retrain_state = state(client, auth_headers, dataset_id)["retrain"]
     assert retrain_state["suggested"] is True
-    assert retrain_state["new_labels"] == 4
+    assert retrain_state["new_labels"] == 16
 
 
 def test_nothing_retrains_until_the_user_asks(client, auth_headers, app, tmp_path, fake_redis):
@@ -239,3 +243,107 @@ def test_reset_clears_scores_and_starts_the_rounds_again(client, auth_headers, a
     body = state(client, auth_headers, dataset_id)
     assert body["round"]["number"] == 0
     assert body["retrain"]["new_labels"] == 0
+
+
+def test_the_llm_seed_is_not_available_yet(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, ["a", "b"])
+
+    resp = start(client, auth_headers, dataset_id, seed_source="llm")
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "LLM-suggested seed batches are not available yet."
+    assert state(client, auth_headers, dataset_id)["active"] is False
+
+
+def test_settings_say_the_llm_seed_is_off(client, auth_headers):
+    body = client.get("/api/active-learning/settings", headers=auth_headers).get_json()
+
+    assert body["seed_sources"] == {"random": True, "llm": False}
+    assert body["min_per_class"] == 5
+
+
+def test_a_random_seed_shuffles_the_queue(client, auth_headers, app, tmp_path):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+
+    served = label_next(client, auth_headers, dataset_id, by_topic, 6)
+
+    assert [t["item_index"] for t in served] != [0, 1, 2, 3, 4, 5]
+
+
+def test_the_same_dataset_gets_the_same_seed_order(client, auth_headers, app, tmp_path):
+    first = _started(client, auth_headers, app, tmp_path)
+    second = _started(client, auth_headers, app, tmp_path)
+
+    assert (
+        next_item(client, auth_headers, first)["task"]["item_index"]
+        == next_item(client, auth_headers, second)["task"]["item_index"]
+    )
+
+
+def test_retrain_is_refused_until_every_class_has_its_minimum(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(10), dataset_labels=["civil", "criminal"])
+    start(client, auth_headers, dataset_id, batch_size=8)
+
+    label_next(client, auth_headers, dataset_id, _all("civil"), 8)
+
+    body = state(client, auth_headers, dataset_id)["retrain"]
+    assert body["allowed"] is False
+    assert body["suggested"] is False
+    assert body["classes_short"] == {"criminal": 5}
+    resp = retrain(client, auth_headers, dataset_id)
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == "Each label needs at least 5 examples before training."
+
+
+def test_retrain_opens_once_every_class_has_its_minimum(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(10), dataset_labels=["civil", "criminal"])
+    start(client, auth_headers, dataset_id)
+
+    label_next(client, auth_headers, dataset_id, _all("civil"), 5)
+    label_next(client, auth_headers, dataset_id, _all("criminal"), 5)
+
+    body = state(client, auth_headers, dataset_id)["retrain"]
+    assert body["allowed"] is True
+    assert body["classes_short"] == {}
+
+
+def test_a_higher_minimum_can_be_chosen(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(10), dataset_labels=["civil", "criminal"])
+    start(client, auth_headers, dataset_id, min_per_class=7)
+
+    label_next(client, auth_headers, dataset_id, _all("civil"), 5)
+    label_next(client, auth_headers, dataset_id, _all("criminal"), 5)
+
+    assert state(client, auth_headers, dataset_id)["retrain"]["classes_short"] == {"civil": 2, "criminal": 2}
+
+
+def test_a_minimum_too_small_to_train_on_is_refused(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, ["a", "b"])
+
+    resp = start(client, auth_headers, dataset_id, min_per_class=2)
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Each label needs at least 5 examples to train on."
+
+
+def test_one_label_is_not_enough_to_train(client, auth_headers, app, tmp_path):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+
+    label_next(client, auth_headers, dataset_id, _all("civil"), 8)
+
+    body = state(client, auth_headers, dataset_id)["retrain"]
+    assert body["allowed"] is False
+    assert body["needs_second_label"] is True
+
+
+def test_labels_already_in_the_file_count_towards_the_minimum(client, auth_headers, app, tmp_path):
+    texts = balanced_texts(10)
+    labels = ["civil"] * 5 + ["criminal"] * 5 + [None] * 10
+    dataset_id = link_dataset(app, tmp_path, texts, labels=labels)
+
+    start(client, auth_headers, dataset_id, holdout_percent=0)
+
+    body = state(client, auth_headers, dataset_id)
+    assert body["label_counts"] == {"civil": 5, "criminal": 5}
+    assert body["retrain"]["allowed"] is True
+    assert body["retrain"]["new_labels"] == 10

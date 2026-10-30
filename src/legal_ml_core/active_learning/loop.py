@@ -5,7 +5,12 @@ from datetime import datetime, timedelta
 
 from flask import current_app
 
-from ..annotation_queue import TRAINED_ON_LABELS, create_annotation_tasks
+from ..annotation_queue import (
+    TRAINED_ON_LABELS,
+    create_annotation_tasks,
+    file_labels,
+    read_rows,
+)
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, sweep_lost_job, sweep_stale_job
 from ..models import ALConfig, ALRound, AnnotationTask, Model, TrainingJob
@@ -15,9 +20,14 @@ from .strategies import DEFAULT_STRATEGY, STRATEGIES, score_pool
 logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 20
+# Below this the trainer's stratified 80/20 split cannot hold every class in its
+# test side, so it is the floor as well as the default.
+MIN_PER_CLASS = 5
 # How long a round may wait for the scoring worker before it is called lost. It
 # is far above the heartbeat window: a transformer scores a large pool slowly.
 DEFAULT_SCORING_STALE_SECONDS = 3600
+
+DEFAULT_RANDOM_SEED = 42
 
 ACTIVE_ROUND_STATUSES = ("training", "scoring")
 
@@ -51,11 +61,22 @@ def validate_host_config(config):
         raise ValueError("LEGAL_ML_AL_DEFAULT_STRATEGY must be in LEGAL_ML_AL_STRATEGIES")
 
 
+def _host_batch_size():
+    return current_app.config.get("LEGAL_ML_AL_BATCH_SIZE", DEFAULT_BATCH_SIZE)
+
+
+def _host_min_per_class():
+    return current_app.config.get("LEGAL_ML_AL_MIN_PER_CLASS", MIN_PER_CLASS)
+
+
 def settings():
     return {
         "strategies": allowed_strategies(),
         "default_strategy": default_strategy(),
-        "default_batch_size": current_app.config.get("LEGAL_ML_AL_BATCH_SIZE", DEFAULT_BATCH_SIZE),
+        "default_batch_size": _host_batch_size(),
+        "min_per_class": _host_min_per_class(),
+        # The LLM seed arrives with LLM assistance in the builder (BAIGLE #67).
+        "seed_sources": {"random": True, "llm": False},
     }
 
 
@@ -80,6 +101,13 @@ def _pool_tasks(dataset_id):
     )
 
 
+def _file_label_counts(dataset):
+    """Per class, the labels the file already gave: they train with the rest."""
+    df = read_rows(dataset.file_path)
+    labels = file_labels(df, dataset)
+    return {str(k): int(v) for k, v in labels.value_counts().items()}
+
+
 def _shuffle_pool(tasks, seed):
     """Random scores: the order of the first batch, before any model exists."""
     for task, score in zip(tasks, score_pool("random", size=len(tasks), seed=seed)):
@@ -94,10 +122,14 @@ def start_loop(dataset, options):
         raise LoopError("Active learning has already started on this Dataset.", 409)
 
     strategy = _checked_strategy(options.get("strategy") or default_strategy())
-    batch_size = _checked_positive_int(
-        options.get("batch_size", current_app.config.get("LEGAL_ML_AL_BATCH_SIZE", DEFAULT_BATCH_SIZE)),
-        "Batch size",
-    )
+    if options.get("seed_source", "random") == "llm":
+        raise LoopError("LLM-suggested seed batches are not available yet.")
+    if options.get("seed_source", "random") != "random":
+        raise LoopError("Choose a random or LLM-suggested seed batch.")
+    batch_size = _checked_positive_int(options.get("batch_size", _host_batch_size()), "Batch size")
+    min_per_class = _checked_positive_int(options.get("min_per_class", _host_min_per_class()), "Minimum per label")
+    if min_per_class < MIN_PER_CLASS:
+        raise LoopError(f"Each label needs at least {MIN_PER_CLASS} examples to train on.")
 
     if not dataset.annotation_tasks:
         create_annotation_tasks(dataset)
@@ -106,9 +138,16 @@ def start_loop(dataset, options):
     if not tasks:
         raise LoopError("This Dataset has no rows to label.")
 
-    config = ALConfig(dataset_id=dataset.id, strategy=strategy, batch_size=batch_size)
+    config = ALConfig(
+        dataset_id=dataset.id,
+        strategy=strategy,
+        batch_size=batch_size,
+        min_per_class=min_per_class,
+        random_seed=DEFAULT_RANDOM_SEED,
+        file_label_counts=_file_label_counts(dataset),
+    )
     db.session.add(config)
-    _shuffle_pool(tasks, config.random_seed or 42)
+    _shuffle_pool(tasks, config.random_seed)
     db.session.add(ALRound(dataset_id=dataset.id, number=0, strategy="random"))
 
 
@@ -128,18 +167,19 @@ def _current_round(dataset_id):
     return ALRound.query.filter_by(dataset_id=dataset_id).order_by(ALRound.number.desc()).first()
 
 
-def _confirmed_label_counts(dataset_id):
+def _confirmed_label_counts(config):
+    """Per class, every label training would use."""
     rows = (
         db.session.query(AnnotationTask.annotation_label, db.func.count())
         .filter(
-            AnnotationTask.dataset_id == dataset_id,
+            AnnotationTask.dataset_id == config.dataset_id,
             AnnotationTask.status == "annotated",
             AnnotationTask.is_holdout.is_(False),
         )
         .group_by(AnnotationTask.annotation_label)
         .all()
     )
-    return Counter(dict(rows))
+    return Counter(dict(rows)) + Counter(config.file_label_counts or {})
 
 
 def _labels_at_last_train(dataset_id):
@@ -173,15 +213,24 @@ def _settle_round(round_row):
             fail_scoring_round(round_row.id)
 
 
-def _retrain_state(config, round_row, counts):
+def _retrain_state(dataset, config, round_row, counts):
     trained = sum(counts.values())
     new_labels = max(trained - _labels_at_last_train(config.dataset_id), 0)
+    classes = set(dataset.labels or []) | set(counts)
+    classes_short = {
+        name: config.min_per_class - counts[name]
+        for name in sorted(classes)
+        if counts[name] < config.min_per_class
+    }
+    needs_second_label = len(classes) < 2
     running = round_row.status in ACTIVE_ROUND_STATUSES
-    allowed = new_labels > 0 and not running
+    allowed = new_labels > 0 and not running and not classes_short and not needs_second_label
     return {
         "new_labels": new_labels,
         "allowed": allowed,
         "suggested": allowed and new_labels >= config.batch_size,
+        "classes_short": classes_short,
+        "needs_second_label": needs_second_label,
     }
 
 
@@ -192,16 +241,17 @@ def loop_state(dataset):
 
     round_row = _current_round(dataset.id)
     _settle_round(round_row)
-    counts = _confirmed_label_counts(dataset.id)
+    counts = _confirmed_label_counts(config)
     return {
         "active": True,
         "strategy": config.strategy,
         "seed_source": config.seed_source,
         "batch_size": config.batch_size,
+        "min_per_class": config.min_per_class,
         "model_id": config.model_id,
         "round": round_row.to_dict(),
         "label_counts": dict(counts),
-        "retrain": _retrain_state(config, round_row, counts),
+        "retrain": _retrain_state(dataset, config, round_row, counts),
     }
 
 
@@ -235,9 +285,14 @@ def request_retrain(dataset, owner_id):
     if round_row.status in ACTIVE_ROUND_STATUSES:
         return {"message": "Training already started", "job_id": round_row.job_id}, 200
 
-    counts = _confirmed_label_counts(dataset.id)
-    if not _retrain_state(config, round_row, counts)["allowed"]:
+    counts = _confirmed_label_counts(config)
+    retrain = _retrain_state(dataset, config, round_row, counts)
+    if not retrain["new_labels"]:
         raise LoopError("There are no new labels to train on.", 409)
+    if retrain["classes_short"]:
+        raise LoopError(f"Each label needs at least {config.min_per_class} examples before training.", 409)
+    if retrain["needs_second_label"]:
+        raise LoopError("Training needs examples of at least two labels.", 409)
 
     claimed = ALRound.query.filter_by(id=round_row.id, status="labelling").update(
         {"status": "training", "labels_used": sum(counts.values()), "error": None}
