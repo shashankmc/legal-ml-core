@@ -253,3 +253,24 @@ def test_a_model_without_a_vectorizer_reads_as_unverified(client, auth_headers, 
 
     assert metrics["verification"] == UNVERIFIED
     assert metrics["f1_score"] == 0.9
+
+
+def test_a_skipped_holdout_item_can_still_be_labelled(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, balanced_texts(5))
+    first = next_item(client, auth_headers, dataset_id)["task"]
+    skipped = client.post(f"/api/annotation/tasks/{first['id']}/skip", headers=auth_headers)
+    assert skipped.status_code == 200
+    # The whole file held back would be refused, so skip every row before a draw
+    # that is bound to reach one of them.
+    for _ in range(9):
+        task = next_item(client, auth_headers, dataset_id)["task"]
+        client.post(f"/api/annotation/tasks/{task['id']}/skip", headers=auth_headers)
+    start(client, auth_headers, dataset_id)
+    assert len(_holdout_tasks(dataset_id)) == 2
+
+    label_next(client, auth_headers, dataset_id, by_topic, 2, holdout=1)
+
+    body = next_item(client, auth_headers, dataset_id, holdout=1)
+    assert body["task"] is None
+    assert "holdout_remaining" not in body["stats"]
+    assert state(client, auth_headers, dataset_id)["holdout"]["labelled"] == 2

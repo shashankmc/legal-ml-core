@@ -52,11 +52,13 @@ def get_next_annotation_task(project_id):
         tasks = tasks.filter(AnnotationTask.dataset_id == dataset_id)
 
     # The holdout is never in the active learning queue. It is labelled only on
-    # request, to grade the model. Otherwise scored items come first, best first,
-    # and rows no loop has scored stay in row order.
+    # request, to grade the model, and rows skipped before the draw count: nothing
+    # else reaches them. Otherwise scored items come first, best first, and rows
+    # no loop has scored stay in row order.
     holdout_mode = request.args.get("holdout") in ("1", "true")
+    statuses = ("pending", "skipped") if holdout_mode else ("pending",)
     candidates = tasks.filter(
-        AnnotationTask.status == "pending", AnnotationTask.is_holdout.is_(holdout_mode)
+        AnnotationTask.status.in_(statuses), AnnotationTask.is_holdout.is_(holdout_mode)
     )
     task = candidates.order_by(AnnotationTask.score.desc().nulls_last(), AnnotationTask.item_index).first()
     total_tasks = tasks.count()
