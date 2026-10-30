@@ -22,12 +22,19 @@ While the version is 0.x, minor releases may contain breaking changes.
   its holdout, or reads `not_independently_verified`.
 - Host config: `LEGAL_ML_AL_STRATEGIES`, `LEGAL_ML_AL_DEFAULT_STRATEGY`,
   `LEGAL_ML_AL_BATCH_SIZE`, `LEGAL_ML_AL_MIN_PER_CLASS`,
-  `LEGAL_ML_AL_HOLDOUT_PERCENT`, `LEGAL_ML_SCORING_QUEUE`.
+  `LEGAL_ML_AL_HOLDOUT_PERCENT`, `LEGAL_ML_AL_SCORING_STALE_SECONDS`,
+  `LEGAL_ML_SCORING_QUEUE`.
+- `PUT /api/active-learning/datasets/<id>/labels` corrects a typed label on every
+  saved item.
 
 ### Changed
 
-- Held-out rows are left out of training, LLM batches, LLM prompt examples and
-  `GET /projects/<id>/tasks`.
+- Held-out rows are left out of training, LLM batches, LLM prompt examples,
+  `GET /projects/<id>/tasks`, suggestion lists, confirm and bulk accept. The
+  holdout is not drawn from rows an LLM touched, and only human or file labels
+  grade a model.
+- With a loop started, creating or training any model on the dataset keeps the
+  minimum per label.
 
 ## [0.3.0] - 2026-10-30
 
