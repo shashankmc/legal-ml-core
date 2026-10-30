@@ -13,15 +13,22 @@ While the version is 0.x, minor releases may contain breaking changes.
 - Active learning for single-label text classification, under
   `/api/active-learning`: a holdout drawn once per dataset, a random seed batch,
   five query strategies on `predict_proba` output with NumPy and scikit-learn, a
-  minimum per label, and a user-triggered retrain with a prompt. The worker
-  rescores the pool on a new `scoring_queue`.
-- Migration `lmc_0003_active_learning`: `al_configs`, `al_rounds`, and
-  `annotation_tasks.score` and `is_holdout`. Hosts with their own Alembic graph
-  need a merge revision.
+  minimum per label up to a cap on labels, and a user-triggered retrain with a
+  prompt. The worker rescores the pool on a new `scoring_queue`.
+- The holdout draw is stratified on labels that already exist, with unlabelled
+  rows random, and `holdout.label_counts` reports it by class.
+- Label cap: a class short of its minimum holds training back only until
+  `LEGAL_ML_AL_CAP_BATCHES` batches of labels. Past that the state names the short
+  classes in `classes_short`, `classes_left_out` and `classes_unseen`. A class with
+  one example is left out of training, and training still needs two classes with
+  2 examples and enough rows for the stratified split.
+- Migrations `lmc_0003_active_learning` (`al_configs`, `al_rounds`, and
+  `annotation_tasks.score` and `is_holdout`) and `lmc_0004_holdout_file_counts`.
+  Hosts with their own Alembic graph need a merge revision.
 - `metrics.verification`: a model trained on a dataset with a loop is graded on
   its holdout, or reads `not_independently_verified`.
 - Host config: `LEGAL_ML_AL_STRATEGIES`, `LEGAL_ML_AL_DEFAULT_STRATEGY`,
-  `LEGAL_ML_AL_BATCH_SIZE`, `LEGAL_ML_AL_MIN_PER_CLASS`,
+  `LEGAL_ML_AL_BATCH_SIZE`, `LEGAL_ML_AL_MIN_PER_CLASS`, `LEGAL_ML_AL_CAP_BATCHES`,
   `LEGAL_ML_AL_HOLDOUT_PERCENT`, `LEGAL_ML_AL_SCORING_STALE_SECONDS`,
   `LEGAL_ML_SCORING_QUEUE`.
 - `PUT /api/active-learning/datasets/<id>/labels` corrects a typed label on every
@@ -34,7 +41,10 @@ While the version is 0.x, minor releases may contain breaking changes.
   holdout is not drawn from rows an LLM touched, and only human or file labels
   grade a model.
 - With a loop started, creating or training any model on the dataset keeps the
-  minimum per label.
+  minimum per label, up to the cap.
+- The trainer no longer fails when a class has no row on the test side, and the
+  confusion matrix keeps a row for it.
+- The stopped-training message says what to do next, in plain words.
 
 ## [0.3.0] - 2026-10-30
 
