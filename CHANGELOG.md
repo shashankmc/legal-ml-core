@@ -8,6 +8,27 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Active learning for single-label text classification, under
+  `/api/active-learning`: a holdout drawn once per dataset, a random seed batch,
+  five query strategies on `predict_proba` output with NumPy and scikit-learn, a
+  minimum per label, and a user-triggered retrain with a prompt. The worker
+  rescores the pool on a new `scoring_queue`.
+- Migration `lmc_0003_active_learning`: `al_configs`, `al_rounds`, and
+  `annotation_tasks.score` and `is_holdout`. Hosts with their own Alembic graph
+  need a merge revision.
+- `metrics.verification`: a model trained on a dataset with a loop is graded on
+  its holdout, or reads `not_independently_verified`.
+- Host config: `LEGAL_ML_AL_STRATEGIES`, `LEGAL_ML_AL_DEFAULT_STRATEGY`,
+  `LEGAL_ML_AL_BATCH_SIZE`, `LEGAL_ML_AL_MIN_PER_CLASS`,
+  `LEGAL_ML_AL_HOLDOUT_PERCENT`, `LEGAL_ML_SCORING_QUEUE`.
+
+### Changed
+
+- Held-out rows are left out of training, LLM batches, LLM prompt examples and
+  `GET /projects/<id>/tasks`.
+
 ## [0.3.0] - 2026-10-30
 
 ### Fixed

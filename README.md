@@ -19,6 +19,8 @@ representations of the same database schema).
 - Model catalog, configuration, training, prediction, LIME/SHAP explanation
 - Visualization (performance metrics, confusion matrix, clustering, topic modeling, model comparison)
 - Annotation task queue
+- Active learning: holdout, seed batch, five query strategies, user-triggered
+  retrain and pool scoring on the worker
 - Experiment monitoring: per-training-job metric time series (dense for the
   HuggingFace Trainer path, coarse phase markers for classical sklearn
   algorithms) and cross-run hyperparameter-vs-performance comparison
@@ -30,6 +32,27 @@ representations of the same database schema).
 Out of scope (stays in the host app): auth, generic project CRUD, and the
 unrelated "learning platform" tutorials feature (including its sandboxed
 code-execution/package-installation queues).
+
+## Active learning
+
+A user-driven loop for single-label text classification, under
+`/api/active-learning`. `POST /datasets/<id>/start` draws the holdout once and
+shuffles a random seed batch. The queue then serves by score. Nothing retrains by
+itself: the state reports `retrain.suggested` once a batch of new labels exists
+and every label has its minimum, and `POST /datasets/<id>/retrain` trains. The
+worker then rescores the pool on `scoring_queue`, so the queue reorders.
+
+Held-out rows are never queued, trained on or sent to an LLM. Metrics come from
+them (`metrics.verification == "holdout"`). With the holdout off or too few of
+its rows labelled, `metrics.verification` is `not_independently_verified`, and a
+UI must show that instead of a grade. `GET queue/next?holdout=1` serves held-out
+items for labelling and `POST /datasets/<id>/verify` grades the saved model.
+
+Host config: `LEGAL_ML_AL_STRATEGIES` (allowed list, default all five),
+`LEGAL_ML_AL_DEFAULT_STRATEGY` (default `prediction_entropy`),
+`LEGAL_ML_AL_BATCH_SIZE` (20), `LEGAL_ML_AL_MIN_PER_CLASS` (5, also the floor),
+`LEGAL_ML_AL_HOLDOUT_PERCENT` (20), `LEGAL_ML_SCORING_QUEUE` (`scoring_queue`, the
+same name passed to `run_ml_worker(scoring_queue=...)`).
 
 ## LLM annotation
 

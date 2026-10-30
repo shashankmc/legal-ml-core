@@ -1023,6 +1023,15 @@ paths:
         "202": {description: Training started}
         "409": {description: No new labels, or a class is short of labels}
         "503": {description: Could not be queued}
+  /api/active-learning/datasets/{dataset_id}/verify:
+    parameters:
+      - {name: dataset_id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [active-learning]
+      summary: Grade the saved model on the holdout, on the worker.
+      responses:
+        "202": {description: Check queued}
+        "409": {description: No model, no holdout, or too few holdout labels}
   /api/annotation/projects/{project_id}/queue/next:
     parameters:
       - $ref: "#/components/parameters/ProjectId"

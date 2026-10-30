@@ -53,6 +53,7 @@ def confirmed_examples(dataset):
             AnnotationTask.dataset_id == dataset.id,
             AnnotationTask.status == "annotated",
             AnnotationTask.label_source.in_(CONFIRMED_SOURCES),
+            AnnotationTask.is_holdout.is_(False),
         )
         .order_by(AnnotationTask.item_index)
         .limit(MAX_EXAMPLES)

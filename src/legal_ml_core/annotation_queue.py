@@ -79,6 +79,32 @@ def file_labels(df, dataset):
     return df.loc[~_is_blank(df[label_column]), label_column]
 
 
+def rows_with_text(df, dataset):
+    """Row positions of ``df`` that have text."""
+    text_column = _find_column(df, dataset.text_column or "text")
+    if text_column is None:
+        return []
+    return (~_is_blank(df[text_column])).to_numpy().nonzero()[0].tolist()
+
+
+def _holdout_of(dataset):
+    config = dataset.al_config
+    return (config.holdout_indices or []) if config else []
+
+
+def holdout_examples(df, dataset):
+    """``(texts, labels)`` of the labelled held-out rows, for grading a model."""
+    holdout = _holdout_of(dataset)
+    text_column = _find_column(df, dataset.text_column or "text")
+    labels = file_labels(df, dataset).astype(object).to_dict()
+    texts_by_row = df[text_column].astype(str)
+    for task in dataset.annotation_tasks:
+        if task.is_holdout and task.status == "annotated":
+            labels[task.item_index] = task.annotation_label
+    rows = [row for row in holdout if row in labels]
+    return [texts_by_row.iloc[row] for row in rows], [str(labels[row]) for row in rows]
+
+
 def record_rows_to_label(dataset, df):
     """Note in ``dataset.columns`` how many rows of ``df`` need a label; caller commits."""
     needs_label = _rows_needing_label(df, dataset)
@@ -153,7 +179,8 @@ def ensure_project_tasks(project_id, owner_id):
 def apply_saved_annotations(df, dataset):
     """``df`` as its text and label columns, in the order the trainer reads them.
 
-    Saved annotations become labels and still-unlabelled rows are dropped.
+    Saved annotations become labels and still-unlabelled rows are dropped, as
+    are held-out rows: they grade the model, so it must never see them.
     """
     if dataset is None or dataset.task_type not in TRAINED_ON_LABELS:
         return df
@@ -172,4 +199,5 @@ def apply_saved_annotations(df, dataset):
     text_column = _find_column(df, dataset.text_column or "text")
     if text_column is None:
         text_column = df.columns[0]
-    return df.loc[~_is_blank(df[label_column]), [text_column, label_column]].reset_index(drop=True)
+    keep = ~_is_blank(df[label_column]) & ~df.index.isin(_holdout_of(dataset))
+    return df.loc[keep, [text_column, label_column]].reset_index(drop=True)

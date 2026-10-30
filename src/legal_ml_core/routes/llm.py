@@ -146,7 +146,10 @@ def _ready_credential(dataset):
 
 def _pending_tasks(dataset, task_ids=None):
     query = AnnotationTask.query.filter(
-        AnnotationTask.dataset_id == dataset.id, AnnotationTask.status == "pending"
+        AnnotationTask.dataset_id == dataset.id,
+        AnnotationTask.status == "pending",
+        # An LLM label on a held-out item would grade the model against the LLM.
+        AnnotationTask.is_holdout.is_(False),
     )
     if task_ids is not None:
         if not isinstance(task_ids, list):

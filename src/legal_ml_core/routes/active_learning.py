@@ -5,6 +5,7 @@ from ..active_learning.loop import (
     LoopError,
     loop_state,
     request_retrain,
+    request_verification,
     set_strategy,
     settings,
     start_loop,
@@ -83,3 +84,16 @@ def retrain(dataset_id):
     except LoopError as error:
         return _refused(error)
     return jsonify({"success": status < 400, **body}), status
+
+
+@active_learning_bp.route("/datasets/<dataset_id>/verify", methods=["POST"])
+@jwt_required()
+def verify(dataset_id):
+    dataset = _owned_dataset(dataset_id)
+    if not dataset:
+        return _not_found()
+    try:
+        request_verification(dataset)
+    except LoopError as error:
+        return _refused(error)
+    return jsonify({"success": True, "message": "Checking the score"}), 202

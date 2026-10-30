@@ -1,7 +1,11 @@
 """The loop's state: starting, retrain requests, and what the user sees next."""
+import json
 import logging
+import secrets
 from collections import Counter
 from datetime import datetime, timedelta
+
+import numpy as np
 
 from flask import current_app
 
@@ -10,11 +14,12 @@ from ..annotation_queue import (
     create_annotation_tasks,
     file_labels,
     read_rows,
+    rows_with_text,
 )
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, sweep_lost_job, sweep_stale_job
 from ..models import ALConfig, ALRound, AnnotationTask, Model, TrainingJob
-from .scoring import fail_scoring_round
+from .scoring import MIN_HOLDOUT_LABELS, fail_scoring_round
 from .strategies import DEFAULT_STRATEGY, STRATEGIES, score_pool
 
 logger = logging.getLogger(__name__)
@@ -27,7 +32,8 @@ MIN_PER_CLASS = 5
 # is far above the heartbeat window: a transformer scores a large pool slowly.
 DEFAULT_SCORING_STALE_SECONDS = 3600
 
-DEFAULT_RANDOM_SEED = 42
+DEFAULT_HOLDOUT_PERCENT = 20
+MAX_HOLDOUT_PERCENT = 50
 
 ACTIVE_ROUND_STATUSES = ("training", "scoring")
 
@@ -65,6 +71,10 @@ def _host_batch_size():
     return current_app.config.get("LEGAL_ML_AL_BATCH_SIZE", DEFAULT_BATCH_SIZE)
 
 
+def _host_holdout_percent():
+    return current_app.config.get("LEGAL_ML_AL_HOLDOUT_PERCENT", DEFAULT_HOLDOUT_PERCENT)
+
+
 def _host_min_per_class():
     return current_app.config.get("LEGAL_ML_AL_MIN_PER_CLASS", MIN_PER_CLASS)
 
@@ -75,6 +85,8 @@ def settings():
         "default_strategy": default_strategy(),
         "default_batch_size": _host_batch_size(),
         "min_per_class": _host_min_per_class(),
+        "default_holdout_percent": _host_holdout_percent(),
+        "max_holdout_percent": MAX_HOLDOUT_PERCENT,
         # The LLM seed arrives with LLM assistance in the builder (BAIGLE #67).
         "seed_sources": {"random": True, "llm": False},
     }
@@ -101,10 +113,21 @@ def _pool_tasks(dataset_id):
     )
 
 
-def _file_label_counts(dataset):
-    """Per class, the labels the file already gave: they train with the rest."""
-    df = read_rows(dataset.file_path)
+def _draw_holdout(df, dataset, percent, seed):
+    """Row positions held back: a random share of all rows with text."""
+    rows = rows_with_text(df, dataset)
+    size = int(round(len(rows) * percent / 100))
+    if percent:
+        size = max(size, 1)
+    drawn = np.random.default_rng(seed).choice(rows, size=size, replace=False)
+    return sorted(int(position) for position in drawn)
+
+
+def _file_label_counts(df, dataset, holdout):
+    """Per class, the labels the file gave outside the holdout: they train with
+    the rest."""
     labels = file_labels(df, dataset)
+    labels = labels[~labels.index.isin(holdout)]
     return {str(k): int(v) for k, v in labels.value_counts().items()}
 
 
@@ -131,9 +154,25 @@ def start_loop(dataset, options):
     if min_per_class < MIN_PER_CLASS:
         raise LoopError(f"Each label needs at least {MIN_PER_CLASS} examples to train on.")
 
+    holdout_percent = options.get("holdout_percent", _host_holdout_percent())
+    if (
+        isinstance(holdout_percent, bool)
+        or not isinstance(holdout_percent, int)
+        or not 0 <= holdout_percent <= MAX_HOLDOUT_PERCENT
+    ):
+        raise LoopError(f"The held-back share must be between 0 and {MAX_HOLDOUT_PERCENT}%.")
+
     if not dataset.annotation_tasks:
         create_annotation_tasks(dataset)
         db.session.flush()
+    df = read_rows(dataset.file_path)
+    seed = secrets.randbelow(2**31)
+    holdout = _draw_holdout(df, dataset, holdout_percent, seed)
+    held_out = set(holdout)
+    for task in AnnotationTask.query.filter_by(dataset_id=dataset.id):
+        task.is_holdout = task.item_index in held_out
+    db.session.flush()
+
     tasks = _pool_tasks(dataset.id)
     if not tasks:
         raise LoopError("This Dataset has no rows to label.")
@@ -143,11 +182,13 @@ def start_loop(dataset, options):
         strategy=strategy,
         batch_size=batch_size,
         min_per_class=min_per_class,
-        random_seed=DEFAULT_RANDOM_SEED,
-        file_label_counts=_file_label_counts(dataset),
+        random_seed=seed,
+        holdout_percent=holdout_percent,
+        holdout_indices=holdout,
+        file_label_counts=_file_label_counts(df, dataset, holdout),
     )
     db.session.add(config)
-    _shuffle_pool(tasks, config.random_seed)
+    _shuffle_pool(tasks, seed)
     db.session.add(ALRound(dataset_id=dataset.id, number=0, strategy="random"))
 
 
@@ -252,6 +293,32 @@ def loop_state(dataset):
         "round": round_row.to_dict(),
         "label_counts": dict(counts),
         "retrain": _retrain_state(dataset, config, round_row, counts),
+        "holdout": _holdout_state(config),
+    }
+
+
+def _holdout_labelled(config):
+    """Rows labelled in the file have no task, so only the unlabelled are counted."""
+    unlabelled = AnnotationTask.query.filter(
+        AnnotationTask.dataset_id == config.dataset_id,
+        AnnotationTask.is_holdout.is_(True),
+        AnnotationTask.status != "annotated",
+    ).count()
+    return len(config.holdout_indices or []) - unlabelled
+
+
+def _holdout_needed(config):
+    return min(MIN_HOLDOUT_LABELS, len(config.holdout_indices or []))
+
+
+def _holdout_state(config):
+    model = db.session.get(Model, config.model_id) if config.model_id else None
+    return {
+        "percent": config.holdout_percent,
+        "size": len(config.holdout_indices or []),
+        "labelled": _holdout_labelled(config),
+        "needed": _holdout_needed(config),
+        "verification": ((model.metrics or {}) if model else {}).get("verification"),
     }
 
 
@@ -316,6 +383,33 @@ def request_retrain(dataset, owner_id):
     round_row.job_id = body["job_id"]
     db.session.commit()
     return {"message": "Training started", "job_id": body["job_id"], "model_id": str(model.id)}, 202
+
+
+def request_verification(dataset):
+    """Grade the saved model on the holdout, after labelling it. Runs on the
+    worker, which already holds the model libraries."""
+    config = _config_of(dataset)
+    model = db.session.get(Model, config.model_id) if config.model_id else None
+    if model is None or model.status != "completed":
+        raise LoopError("Train a Model before checking its score.", 409)
+    missing = _holdout_needed(config) - _holdout_labelled(config)
+    if not config.holdout_indices:
+        raise LoopError("This Dataset has no held-back items.", 409)
+    if missing > 0:
+        item = "item" if missing == 1 else "items"
+        raise LoopError(f"Label {missing} more held-back {item} before checking the score.", 409)
+
+    current_app.redis_client.lpush(
+        current_app.config.get("LEGAL_ML_SCORING_QUEUE", "scoring_queue"),
+        json.dumps(
+            {
+                "action": "verify",
+                "dataset_id": str(dataset.id),
+                "model_id": str(model.id),
+                "model_type": model.model_type,
+            }
+        ),
+    )
 
 
 def reset_loops(tasks):

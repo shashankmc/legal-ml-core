@@ -7,15 +7,30 @@ from datetime import datetime
 import joblib
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 
+from ..annotation_queue import holdout_examples, read_rows
 from ..db import db
-from ..models import ALConfig, ALRound, AnnotationTask
+from ..models import ALConfig, ALRound, AnnotationTask, Dataset, Model
 from ..storage import get_storage_backend
 from .strategies import score_pool
 
 logger = logging.getLogger(__name__)
 
 SCORING_FAILED_MESSAGE = "The queue could not be reordered. Try retraining."
+
+# Metrics without a holdout behind them: the verdict must not grade these.
+UNVERIFIED = "not_independently_verified"
+VERIFIED = "holdout"
+# Fewer held-back labels than this (or than the holdout holds) grade nothing.
+MIN_HOLDOUT_LABELS = 10
 
 TRANSFORMER_TYPES = ("legalbert", "roberta")
 TRANSFORMER_BATCH_SIZE = 32
@@ -71,6 +86,53 @@ def _embeddings(model_data, texts):
     return TfidfVectorizer(max_features=5000).fit_transform(cleaned)
 
 
+def _holdout_metrics(model_data, model_type, texts, labels):
+    probabilities, classes = class_probabilities(model_data, model_type, texts)
+    predicted = [classes[i] for i in probabilities.argmax(axis=1)]
+    names = sorted(set(labels) | set(predicted))
+    return {
+        "accuracy": accuracy_score(labels, predicted),
+        "precision": precision_score(labels, predicted, average="weighted", zero_division=0),
+        "recall": recall_score(labels, predicted, average="weighted", zero_division=0),
+        "f1_score": f1_score(labels, predicted, average="weighted", zero_division=0),
+        "confusion_matrix": confusion_matrix(labels, predicted, labels=names).tolist(),
+        "confusion_matrix_labels": names,
+        "classification_report": classification_report(labels, predicted, labels=names, zero_division=0),
+    }
+
+
+def grade_on_holdout(dataset, model_data, model_type, metrics):
+    """``metrics`` graded on the holdout, or marked as not independently verified
+    when it is off or holds too few labels to mean anything."""
+    texts, labels = holdout_examples(read_rows(dataset.file_path), dataset)
+    holdout_size = len(dataset.al_config.holdout_indices or [])
+    if not texts or len(texts) < min(MIN_HOLDOUT_LABELS, holdout_size):
+        return {**metrics, "verification": UNVERIFIED, "holdout_labels": len(texts)}
+    return {
+        **metrics,
+        **_holdout_metrics(model_data, model_type, texts, labels),
+        "verification": VERIFIED,
+        "holdout_labels": len(texts),
+    }
+
+
+def verify_model(dataset, model_path, model_type, metrics):
+    """Grade a just-saved model when its dataset has a loop, else leave ``metrics``."""
+    if dataset is None or dataset.al_config is None:
+        return metrics
+    return grade_on_holdout(dataset, joblib.load(model_path), model_type, metrics)
+
+
+def _process_verification(task_info, model_storage_path):
+    model = db.session.get(Model, task_info["model_id"])
+    dataset = db.session.get(Dataset, task_info["dataset_id"])
+    if model is None or dataset is None or dataset.al_config is None:
+        return
+    model_path = get_storage_backend().get_model_path(model_storage_path, model.id)
+    model.metrics = verify_model(dataset, model_path, task_info["model_type"], model.metrics or {})
+    db.session.commit()
+
+
 def _pool_tasks(dataset_id):
     return (
         AnnotationTask.query.filter_by(dataset_id=dataset_id, is_holdout=False)
@@ -102,6 +164,10 @@ def process_scoring_task(task_info, model_storage_path):
     """Score the pool and move the loop to its next round. Must be called with a
     Flask app context pushed. Scores and the round change commit together, so
     the queue never reorders without the round saying so."""
+    if task_info.get("action") == "verify":
+        _process_verification(task_info, model_storage_path)
+        return
+
     round_row = db.session.get(ALRound, task_info["round_id"])
     if round_row is None or round_row.status != "scoring":
         logger.info("scoring round %s is no longer waiting; skipping", task_info["round_id"])
@@ -142,6 +208,7 @@ def queue_pool_scoring(task_info, redis_client, scoring_queue):
         return
     config = ALConfig.query.filter_by(dataset_id=round_row.dataset_id).first()
     round_row.status = "scoring"
+    round_row.metrics = db.session.get(Model, task_info["model_id"]).metrics
     db.session.commit()
     try:
         redis_client.lpush(

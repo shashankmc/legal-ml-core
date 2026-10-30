@@ -1,5 +1,8 @@
 """The loop: label a batch, retrain on request, and the queue reorders."""
+import pytest
+
 from legal_ml_core import ALRound, TrainingJob, db
+from legal_ml_core.active_learning.loop import validate_host_config
 from tests.active_learning_helpers import (
     PROJECT_ID,
     balanced_texts,
@@ -100,6 +103,13 @@ def test_settings_list_the_hosts_strategies_and_default(client, auth_headers, ap
     assert body["default_strategy"] == "breaking_ties"
 
 
+def test_a_bad_host_strategy_list_fails_at_import(app):
+    with pytest.raises(ValueError):
+        validate_host_config({"LEGAL_ML_AL_STRATEGIES": ["sampling_mode"]})
+    with pytest.raises(ValueError):
+        validate_host_config({"LEGAL_ML_AL_STRATEGIES": ["random"], "LEGAL_ML_AL_DEFAULT_STRATEGY": "breaking_ties"})
+
+
 def test_retrain_with_no_labels_is_refused(client, auth_headers, app, tmp_path):
     dataset_id = _started(client, auth_headers, app, tmp_path)
 
@@ -158,7 +168,7 @@ def test_the_queue_serves_the_highest_score_first(client, auth_headers, app, tmp
     served = next_item(client, auth_headers, dataset_id)["task"]
 
     remaining = [task_for(dataset_id, i) for i in range(40)]
-    top = max((t.score for t in remaining if t.status == "pending"))
+    top = max(t.score for t in remaining if t.status == "pending" and not t.is_holdout)
     assert task_for(dataset_id, served["item_index"]).score == top
 
 
@@ -268,16 +278,6 @@ def test_a_random_seed_shuffles_the_queue(client, auth_headers, app, tmp_path):
     served = label_next(client, auth_headers, dataset_id, by_topic, 6)
 
     assert [t["item_index"] for t in served] != [0, 1, 2, 3, 4, 5]
-
-
-def test_the_same_dataset_gets_the_same_seed_order(client, auth_headers, app, tmp_path):
-    first = _started(client, auth_headers, app, tmp_path)
-    second = _started(client, auth_headers, app, tmp_path)
-
-    assert (
-        next_item(client, auth_headers, first)["task"]["item_index"]
-        == next_item(client, auth_headers, second)["task"]["item_index"]
-    )
 
 
 def test_retrain_is_refused_until_every_class_has_its_minimum(client, auth_headers, app, tmp_path):

@@ -51,12 +51,14 @@ def get_next_annotation_task(project_id):
     if dataset_id:
         tasks = tasks.filter(AnnotationTask.dataset_id == dataset_id)
 
-    # Scored items first, best first. Rows no loop has scored stay in row order.
-    task = (
-        tasks.filter(AnnotationTask.status == "pending")
-        .order_by(AnnotationTask.score.desc().nulls_last(), AnnotationTask.item_index)
-        .first()
+    # The holdout is never in the active learning queue. It is labelled only on
+    # request, to grade the model. Otherwise scored items come first, best first,
+    # and rows no loop has scored stay in row order.
+    holdout_mode = request.args.get("holdout") in ("1", "true")
+    candidates = tasks.filter(
+        AnnotationTask.status == "pending", AnnotationTask.is_holdout.is_(holdout_mode)
     )
+    task = candidates.order_by(AnnotationTask.score.desc().nulls_last(), AnnotationTask.item_index).first()
     total_tasks = tasks.count()
     annotated_tasks = tasks.filter(AnnotationTask.status == "annotated").count()
 
@@ -66,6 +68,11 @@ def get_next_annotation_task(project_id):
         "annotated": annotated_tasks,
         "percentage": percentage,
     }
+    holdout_remaining = tasks.filter(
+        AnnotationTask.is_holdout.is_(True), AnnotationTask.status != "annotated"
+    ).count()
+    if holdout_remaining:
+        stats["holdout_remaining"] = holdout_remaining
 
     if not task:
         message = "All items annotated" if total_tasks else "Nothing to annotate"
@@ -209,7 +216,7 @@ def list_annotation_tasks(project_id):
     status = request.args.get("status")
     dataset_id = request.args.get("dataset_id")
 
-    query = _owned_tasks(project_id, owner_id)
+    query = _owned_tasks(project_id, owner_id).filter(AnnotationTask.is_holdout.is_(False))
     if status:
         query = query.filter(AnnotationTask.status == status)
     if dataset_id:
