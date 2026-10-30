@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 import numpy as np
 import json
@@ -23,10 +24,11 @@ def convert_numpy_types(obj):
     """Convert numpy types to Python native types for JSON serialization"""
     if isinstance(obj, np.integer):
         return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
+    elif isinstance(obj, (float, np.floating)):
+        # NaN and infinity are not JSON: an all-blank column has no statistics.
+        return float(obj) if math.isfinite(obj) else None
     elif isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return convert_numpy_types(obj.tolist())
     elif isinstance(obj, dict):
         return {key: convert_numpy_types(value) for key, value in obj.items()}
     elif isinstance(obj, list):
