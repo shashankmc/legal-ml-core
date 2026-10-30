@@ -5,6 +5,7 @@ from legal_ml_core import ALRound, TrainingJob, db
 from legal_ml_core.active_learning.loop import validate_host_config
 from tests.active_learning_helpers import (
     PROJECT_ID,
+    alternating,
     balanced_texts,
     by_topic,
     label_next,
@@ -122,10 +123,11 @@ def test_retrain_with_no_labels_is_refused(client, auth_headers, app, tmp_path):
 def test_retrain_prompt_appears_once_a_batch_is_labelled(client, auth_headers, app, tmp_path):
     dataset_id = _started(client, auth_headers, app, tmp_path, batch_size=16)
 
-    label_next(client, auth_headers, dataset_id, by_topic, 15)
+    labeller = alternating()
+    label_next(client, auth_headers, dataset_id, labeller, 15)
     assert state(client, auth_headers, dataset_id)["retrain"]["suggested"] is False
 
-    label_next(client, auth_headers, dataset_id, by_topic, 1)
+    label_next(client, auth_headers, dataset_id, labeller, 1)
     retrain_state = state(client, auth_headers, dataset_id)["retrain"]
     assert retrain_state["suggested"] is True
     assert retrain_state["new_labels"] == 16
@@ -140,7 +142,7 @@ def test_nothing_retrains_until_the_user_asks(client, auth_headers, app, tmp_pat
 
 
 def _trained_round(client, auth_headers, app, fake_redis, dataset_id, labels=16):
-    label_next(client, auth_headers, dataset_id, by_topic, labels)
+    label_next(client, auth_headers, dataset_id, alternating(), labels)
     resp = retrain(client, auth_headers, dataset_id)
     assert resp.status_code == 202
     run_training(app, fake_redis)
@@ -189,7 +191,7 @@ def test_a_second_round_keeps_one_model_and_counts_only_new_labels(client, auth_
 
 def test_a_double_retrain_starts_one_job(client, auth_headers, app, tmp_path, fake_redis):
     dataset_id = _started(client, auth_headers, app, tmp_path)
-    label_next(client, auth_headers, dataset_id, by_topic, 16)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
 
     first = retrain(client, auth_headers, dataset_id)
     second = retrain(client, auth_headers, dataset_id)
@@ -202,7 +204,7 @@ def test_a_double_retrain_starts_one_job(client, auth_headers, app, tmp_path, fa
 
 def test_a_failed_training_returns_to_labelling_with_the_reason(client, auth_headers, app, tmp_path, fake_redis):
     dataset_id = _started(client, auth_headers, app, tmp_path)
-    label_next(client, auth_headers, dataset_id, by_topic, 16)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
     retrain(client, auth_headers, dataset_id)
     job = TrainingJob.query.one()
     job.status = "failed"
@@ -218,7 +220,7 @@ def test_a_failed_training_returns_to_labelling_with_the_reason(client, auth_hea
 
 def test_a_training_that_could_not_queue_reports_it_and_keeps_labelling(client, auth_headers, app, tmp_path, fake_redis):
     dataset_id = _started(client, auth_headers, app, tmp_path)
-    label_next(client, auth_headers, dataset_id, by_topic, 16)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
 
     def boom(*args):
         raise ConnectionError("redis down")

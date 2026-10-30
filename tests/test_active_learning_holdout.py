@@ -6,6 +6,7 @@ from tests.active_learning_helpers import (
     by_topic,
     label,
     label_next,
+    label_until_trainable,
     link_dataset,
     loop_model,
     next_item,
@@ -29,7 +30,7 @@ def _holdout_tasks(dataset_id):
 
 
 def _train_round(client, auth_headers, app, fake_redis, dataset_id, labels=16):
-    label_next(client, auth_headers, dataset_id, by_topic, labels)
+    label_until_trainable(client, auth_headers, dataset_id, labels)
     assert retrain(client, auth_headers, dataset_id).status_code == 202
     run_training(app, fake_redis)
     run_scoring(app, fake_redis)

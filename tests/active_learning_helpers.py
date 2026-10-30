@@ -1,4 +1,5 @@
 """Shared set-up for the active learning API tests."""
+import itertools
 import json
 
 import pandas as pd
@@ -97,6 +98,21 @@ def run_scoring(app, fake_redis):
 
 def by_topic(text):
     return "civil" if "contract" in text else "criminal"
+
+
+def alternating():
+    """Two labels in turn. The queue is shuffled, so labelling by topic can leave
+    a class short of its minimum by chance; this cannot."""
+    values = itertools.cycle(("civil", "criminal"))
+    return lambda text: next(values)
+
+
+def label_until_trainable(client, auth_headers, dataset_id, count):
+    """At least ``count`` labels by topic, then more until every class has its
+    minimum, for tests that need the labels to be right."""
+    label_next(client, auth_headers, dataset_id, by_topic, count)
+    while not state(client, auth_headers, dataset_id)["retrain"]["allowed"]:
+        label_next(client, auth_headers, dataset_id, by_topic, 1)
 
 
 def balanced_texts(pairs):
