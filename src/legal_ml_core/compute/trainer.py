@@ -199,12 +199,16 @@ class MLModelTrainer:
                 fit_prior=parameters.get("fit_prior", True),
             )
         elif model_type == "logistic_regression":
+            penalty = parameters.get("penalty", "l2")
+            # Without a ratio, scikit-learn 1.8 and later fit elasticnet as plain l2.
+            mix = {"l1_ratio": parameters.get("l1_ratio", 0.5)} if penalty == "elasticnet" else {}
             self.model = LogisticRegression(
                 C=parameters.get("C", 1.0),
-                penalty=parameters.get("penalty", "l2"),
+                penalty=penalty,
                 solver=parameters.get("solver", "lbfgs"),
                 class_weight=class_weight,
                 random_state=42,
+                **mix,
             )
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
@@ -373,6 +377,10 @@ class MLModelTrainer:
 
         # Train model
         self.model.fit(X)
+        if not self.model.components_.any():
+            raise ValueError(
+                "The regularisation (alpha) removed every topic on this Dataset. Choose a smaller alpha."
+            )
 
         # Get topics
         feature_names = self.vectorizer.get_feature_names_out()

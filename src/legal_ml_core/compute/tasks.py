@@ -97,6 +97,16 @@ def _job_left_active_in_db(job_id):
     return status not in ACTIVE_JOB_STATUSES
 
 
+def _chosen_parameters(task_info):
+    """The flat parameters the trainer reads: the Model's choices, nested under
+    "parameters" in the queue message. The server's own values go last, so a
+    stored parameter can never replace them."""
+    parameters = dict(task_info.get("parameters") or {})
+    parameters.setdefault("random_state", task_info.get("random_state", 42))
+    parameters["model_id"] = task_info["model_id"]
+    return parameters
+
+
 def process_training_task(
     task_info,
     redis_client,
@@ -184,15 +194,15 @@ def process_training_task(
         metric_logger.log("training_started", 1.0)
 
         # Train model based on task type
+        parameters = _chosen_parameters(task_info)
         if task_info["model_type"] in ["legalbert", "roberta"]:
-            task_params = dict(task_info)
-            task_params["output_dir"] = get_storage_backend().get_transformer_output_dir(
+            parameters["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
             )
             # Checks for a Stop every HF step and raises TrainingCancelled
             # itself, skipping evaluate/predict.
             metrics = trainer.train_transformer_model(
-                texts, labels, task_info["model_type"], task_params
+                texts, labels, task_info["model_type"], parameters
             )
         elif task_info["task_type"] in [
             "classification",
@@ -200,16 +210,16 @@ def process_training_task(
             "judgment_prediction",
         ]:
             metrics = trainer.train_classification_model(
-                texts, labels, task_info["model_type"], task_info
+                texts, labels, task_info["model_type"], parameters
             )
         elif task_info["task_type"] in ["topic_modeling", "clustering"]:
             if task_info["model_type"] in ["kmeans", "hierarchical", "dbscan"]:
                 metrics = trainer.train_clustering_model(
-                    texts, task_info["model_type"], task_info
+                    texts, task_info["model_type"], parameters
                 )
             else:
                 metrics = trainer.train_topic_modeling(
-                    texts, task_info["model_type"], task_info
+                    texts, task_info["model_type"], parameters
                 )
         else:
             raise ValueError(f"Unsupported task type: {task_info['task_type']}")
