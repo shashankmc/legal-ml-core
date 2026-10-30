@@ -24,6 +24,10 @@ LABEL_COLUMNS = {
 # its entities column, so saved NER spans have nothing to feed yet.
 TRAINED_ON_LABELS = {"classification", "document_classification", "judgment_prediction"}
 
+# Task types offered on the annotation screen. Summarization is left out: no
+# trainer reads the summary column, so a summary written there would go nowhere.
+QUEUED_TASK_TYPES = TRAINED_ON_LABELS | {"ner", "named_entity_recognition"}
+
 
 def _find_column(df, name):
     """The column of ``df`` called ``name``, ignoring case, else ``None``."""
@@ -47,6 +51,9 @@ def _read_rows(file_path):
 
 def create_annotation_tasks(dataset):
     """Add one pending task per unlabelled row of ``dataset``; caller commits."""
+    if dataset.task_type not in QUEUED_TASK_TYPES:
+        return
+
     label_name = dataset.label_column or LABEL_COLUMNS.get(dataset.task_type)
     if not label_name:
         return

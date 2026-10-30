@@ -88,6 +88,14 @@ def test_task_types_without_labels_queue_nothing(client, auth_headers, app, tmp_
     assert _tasks(client, auth_headers) == []
 
 
+def test_summarization_is_not_queued(client, auth_headers, app, tmp_path):
+    # No trainer learns from summaries, so writing them here would go nowhere.
+    rows = {"text": ["a", "b"], "summary": [None, None]}
+    _link_dataset(app, tmp_path, rows, task_type="summarization")
+
+    assert _tasks(client, auth_headers) == []
+
+
 def test_rows_with_blank_text_are_left_out(client, auth_headers, app, tmp_path):
     _link_dataset(app, tmp_path, {"text": ["a", None], "label": [None, None]})
 
@@ -129,6 +137,49 @@ def test_stats_count_rows_before_the_queue_is_opened(client, auth_headers, app, 
     resp = client.get(f"/api/annotation/projects/{PROJECT_ID}/queue/stats", headers=auth_headers)
 
     assert resp.get_json()["stats"]["pending"] == 2
+
+
+def _queued_task(app, tmp_path, client, auth_headers):
+    _link_dataset(app, tmp_path, {"text": ["a"], "label": [None]})
+    return _next(client, auth_headers)["task"]["id"]
+
+
+def test_saving_an_empty_label_is_refused(client, auth_headers, app, tmp_path):
+    task_id = _queued_task(app, tmp_path, client, auth_headers)
+
+    resp = client.post(
+        f"/api/annotation/tasks/{task_id}/save", json={"annotation_label": ""}, headers=auth_headers
+    )
+
+    assert resp.status_code == 400
+    assert db.session.get(AnnotationTask, task_id).status == "pending"
+
+
+def test_saving_a_whitespace_label_is_refused(client, auth_headers, app, tmp_path):
+    task_id = _queued_task(app, tmp_path, client, auth_headers)
+
+    resp = client.post(
+        f"/api/annotation/tasks/{task_id}/save",
+        json={"annotation_label": "   "},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 400
+    assert db.session.get(AnnotationTask, task_id).status == "pending"
+
+
+def test_a_passage_with_no_entities_can_be_saved(client, auth_headers, app, tmp_path):
+    _link_dataset(app, tmp_path, {"text": ["a"], "entities": [None]}, task_type="ner")
+    task_id = _next(client, auth_headers)["task"]["id"]
+
+    resp = client.post(
+        f"/api/annotation/tasks/{task_id}/save",
+        json={"annotation_label": "[]"},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    assert db.session.get(AnnotationTask, task_id).status == "annotated"
 
 
 def test_unreadable_file_leaves_the_queue_empty(client, auth_headers, app, tmp_path):

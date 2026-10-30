@@ -128,6 +128,9 @@ def save_annotation(task_id):
         if annotation_label is None:
             return jsonify({"success": False, "error": "annotation_label is required"}), 400
 
+        if isinstance(annotation_label, str) and not annotation_label.strip():
+            return jsonify({"success": False, "error": "annotation_label must not be empty"}), 400
+
         if isinstance(annotation_label, (dict, list)):
             task.annotation_label = json.dumps(annotation_label)
         else:
