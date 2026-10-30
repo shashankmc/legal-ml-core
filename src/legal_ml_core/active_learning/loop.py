@@ -215,6 +215,22 @@ def set_strategy(dataset, strategy):
     config.strategy = _checked_strategy(strategy)
 
 
+def rename_label(dataset, old, new):
+    """Correct a label typed wrong, on every saved item that has it; caller
+    commits. Only for typed labels: a Dataset that names its labels has no typos,
+    and a label from the file stays as the file has it."""
+    _config_of(dataset)
+    if dataset.labels:
+        raise LoopError("This Dataset names its labels, so they cannot be changed here.")
+    if not isinstance(new, str) or not new.strip():
+        raise LoopError("Type the label to use instead.")
+    changed = AnnotationTask.query.filter_by(
+        dataset_id=dataset.id, status="annotated", annotation_label=old
+    ).update({"annotation_label": new.strip()}, synchronize_session=False)
+    if not changed:
+        raise LoopError("No saved label has that name.", 404)
+
+
 def _config_of(dataset):
     if dataset.al_config is None:
         raise LoopError("Active learning has not started on this Dataset.", 409)
@@ -354,6 +370,7 @@ def loop_state(dataset):
         "model_id": config.model_id,
         "round": round_row.to_dict(),
         "label_counts": dict(counts),
+        "typed_labels": not dataset.labels,
         "retrain": _retrain_state(dataset, config, round_row, counts),
         "holdout": _holdout_state(config),
     }

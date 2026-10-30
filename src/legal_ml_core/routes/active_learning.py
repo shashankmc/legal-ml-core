@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request
 from ..active_learning.loop import (
     LoopError,
     loop_state,
+    rename_label,
     request_retrain,
     request_verification,
     set_strategy,
@@ -67,6 +68,21 @@ def change_strategy(dataset_id):
         return _not_found()
     try:
         set_strategy(dataset, (request.get_json(silent=True) or {}).get("strategy"))
+    except LoopError as error:
+        return _refused(error)
+    db.session.commit()
+    return jsonify({"success": True, **loop_state(dataset)}), 200
+
+
+@active_learning_bp.route("/datasets/<dataset_id>/labels", methods=["PUT"])
+@jwt_required()
+def correct_label(dataset_id):
+    dataset = _owned_dataset(dataset_id)
+    if not dataset:
+        return _not_found()
+    body = request.get_json(silent=True) or {}
+    try:
+        rename_label(dataset, body.get("from"), body.get("to"))
     except LoopError as error:
         return _refused(error)
     db.session.commit()

@@ -516,3 +516,74 @@ def test_a_dataset_with_no_loop_trains_as_before(client, auth_headers, app, tmp_
     resp = client.post(f"/api/models/{_outside_model(dataset_id)}/train", json={}, headers=auth_headers)
 
     assert resp.status_code == 200
+
+
+def _rename(client, auth_headers, dataset_id, old, new):
+    return client.put(
+        f"/api/active-learning/datasets/{dataset_id}/labels",
+        json={"from": old, "to": new},
+        headers=auth_headers,
+    )
+
+
+def _typo_loop(client, auth_headers, app, tmp_path):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
+    label_next(client, auth_headers, dataset_id, _all("crimnal"), 1)
+    return dataset_id
+
+
+def test_a_mistyped_label_blocks_retrain_until_it_is_corrected(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _typo_loop(client, auth_headers, app, tmp_path)
+    before = state(client, auth_headers, dataset_id)
+    assert before["retrain"]["classes_short"] == {"crimnal": 4}
+    assert before["typed_labels"] is True
+
+    resp = _rename(client, auth_headers, dataset_id, "crimnal", " criminal ")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["label_counts"] == {"civil": 8, "criminal": 9}
+    assert body["retrain"]["allowed"] is True
+    assert retrain(client, auth_headers, dataset_id).status_code == 202
+
+
+def test_correcting_a_label_reaches_held_back_items_too(client, auth_headers, app, tmp_path):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    task = next_item(client, auth_headers, dataset_id, holdout=1)["task"]
+    client.post(f"/api/annotation/tasks/{task['id']}/save", json={"annotation_label": "crimnal"}, headers=auth_headers)
+
+    assert _rename(client, auth_headers, dataset_id, "crimnal", "criminal").status_code == 200
+
+    db.session.expire_all()
+    assert task_for(dataset_id, task["item_index"]).annotation_label == "criminal"
+
+
+def test_a_label_nothing_uses_cannot_be_corrected(client, auth_headers, app, tmp_path):
+    dataset_id = _typo_loop(client, auth_headers, app, tmp_path)
+
+    resp = _rename(client, auth_headers, dataset_id, "nothing", "civil")
+
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "No saved label has that name."
+
+
+@pytest.mark.parametrize("new", ["", "   ", None, 3])
+def test_a_label_cannot_be_corrected_to_nothing(client, auth_headers, app, tmp_path, new):
+    dataset_id = _typo_loop(client, auth_headers, app, tmp_path)
+
+    assert _rename(client, auth_headers, dataset_id, "crimnal", new).status_code == 400
+
+
+def test_a_dataset_that_names_its_labels_keeps_them(client, auth_headers, app, tmp_path):
+    dataset_id = _named_label_loop(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, _all("civil"), 1)
+
+    assert state(client, auth_headers, dataset_id)["typed_labels"] is False
+    assert _rename(client, auth_headers, dataset_id, "civil", "criminal").status_code == 400
+
+
+def test_correcting_a_label_needs_a_loop(client, auth_headers, app, tmp_path):
+    dataset_id = link_dataset(app, tmp_path, ["a", "b"])
+
+    assert _rename(client, auth_headers, dataset_id, "x", "y").status_code == 409
