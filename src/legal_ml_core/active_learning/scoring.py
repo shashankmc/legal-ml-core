@@ -192,20 +192,31 @@ def queue_pool_scoring(task_info, redis_client, scoring_queue):
     round_row = db.session.get(ALRound, round_id)
     config = ALConfig.query.filter_by(dataset_id=round_row.dataset_id).first()
     try:
-        redis_client.lpush(
-            scoring_queue,
-            json.dumps(
-                {
-                    "round_id": str(round_id),
-                    "dataset_id": str(round_row.dataset_id),
-                    "model_id": str(task_info["model_id"]),
-                    "strategy": config.strategy,
-                }
-            ),
-        )
+        redis_client.lpush(scoring_queue, _scoring_message(round_row, task_info["model_id"], config.strategy))
     except Exception as e:
         logger.warning("round %s: scoring could not be queued: %s", round_id, e)
         fail_scoring_round(round_id)
+
+
+def requeue_unfinished_scoring(redis_client, scoring_queue):
+    """A worker that dies mid-pass takes the round's message with it, so a new
+    worker sends it again. Must be called with a Flask app context pushed. A round
+    still queued gets a second message, which finds the round closed and skips."""
+    for round_row in ALRound.query.filter_by(status="scoring").all():
+        config = ALConfig.query.filter_by(dataset_id=round_row.dataset_id).first()
+        redis_client.lpush(scoring_queue, _scoring_message(round_row, round_row.model_id, config.strategy))
+        logger.info("round %s: scoring queued again after a worker restart", round_row.id)
+
+
+def _scoring_message(round_row, model_id, strategy):
+    return json.dumps(
+        {
+            "round_id": str(round_row.id),
+            "dataset_id": str(round_row.dataset_id),
+            "model_id": str(model_id),
+            "strategy": strategy,
+        }
+    )
 
 
 def fail_scoring_round(round_id):

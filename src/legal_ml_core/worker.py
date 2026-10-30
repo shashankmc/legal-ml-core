@@ -22,7 +22,7 @@ from datetime import datetime
 import redis as redis_lib
 from flask import Flask
 
-from .active_learning.scoring import fail_scoring_round, process_scoring_task
+from .active_learning.scoring import fail_scoring_round, process_scoring_task, requeue_unfinished_scoring
 from .compute.tasks import process_explanation_task, process_prediction_task, process_training_task
 from .db import db, get_db, set_active_db
 from .compute.tasks import REDIS_DOWN_ERRORS
@@ -303,6 +303,12 @@ def run_ml_worker(
     app = _build_worker_app(database_url)
     if usage_meter is not None:
         app.config["USAGE_METER"] = usage_meter
+
+    try:
+        with app.app_context():
+            requeue_unfinished_scoring(redis_client, scoring_queue)
+    except Exception:
+        logger.exception("could not requeue unfinished scoring rounds")
 
     threads = [
         threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue, liveness), kwargs={"scoring_queue": scoring_queue}, daemon=True),

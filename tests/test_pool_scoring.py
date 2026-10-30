@@ -7,6 +7,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 
 from legal_ml_core import ALConfig, ALRound, AnnotationTask, Dataset, Model, db
+from legal_ml_core.active_learning.scoring import requeue_unfinished_scoring
 from legal_ml_core.storage import get_model_path
 from legal_ml_core.worker import _scoring_loop
 from tests.conftest import TEST_USER_ID
@@ -166,3 +167,31 @@ def test_a_round_records_the_strategy_that_ordered_it(app, fake_redis):
     _run(app, fake_redis, rnd, model, "prediction_entropy")
 
     assert ALRound.query.filter_by(dataset_id=dataset.id, number=1).one().strategy == "prediction_entropy"
+
+
+def test_a_worker_restart_resumes_a_pass_the_old_worker_took_with_it(app, fake_redis):
+    dataset, _, rnd = _scoring_setup(app)
+    assert fake_redis.llen("scoring_queue") == 0
+
+    requeue_unfinished_scoring(fake_redis, "scoring_queue")
+    _scoring_loop(
+        fake_redis,
+        app.config["MODEL_FOLDER"],
+        app,
+        stop=lambda: fake_redis.llen("scoring_queue") == 0,
+        sleep=lambda s: None,
+    )
+    db.session.expire_all()
+
+    assert db.session.get(ALRound, rnd.id).status == "completed"
+    assert all(score is not None for score in _scores(dataset).values())
+
+
+def test_a_worker_restart_leaves_finished_rounds_out_of_the_queue(app, fake_redis):
+    _, _, rnd = _scoring_setup(app)
+    rnd.status = "completed"
+    db.session.commit()
+
+    requeue_unfinished_scoring(fake_redis, "scoring_queue")
+
+    assert fake_redis.llen("scoring_queue") == 0
