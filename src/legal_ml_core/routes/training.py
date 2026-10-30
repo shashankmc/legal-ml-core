@@ -6,14 +6,15 @@ from ..db import db
 from ..models import Model, Dataset, TrainingJob, TrainingMetricPoint
 from ..job_state import (
     ACTIVE_JOB_STATUSES,
-    DEFAULT_STALE_SECONDS,
+    COULD_NOT_START_MESSAGE,
+    sweep_lost_job,
     sweep_stale_job,
     transition,
     waiting_message,
     worker_is_alive,
 )
 from ..queue_contract import JOB_CANCEL_TTL_SECONDS, job_cancel_key, job_status_key
-from .models import validate_model_task_compatibility
+from .models import stale_after, start_training_job, training_queue
 import json
 import uuid
 from datetime import datetime
@@ -23,20 +24,18 @@ logger = logging.getLogger(__name__)
 training_bp = Blueprint("training", __name__)
 
 
-def _stale_after():
-    return current_app.config.get("LEGAL_ML_HEARTBEAT_STALE_SECONDS", DEFAULT_STALE_SECONDS)
-
-
 def _liveness_view(jobs):
     """R5/D12 on read: sweep dead running jobs to failed, then return
     {job_id: waiting message} for queued jobs when no worker is alive."""
     redis_client = current_app.redis_client
-    stale_after = _stale_after()
+    stale_seconds = stale_after()
+    queue = training_queue()
     for job in jobs:
-        sweep_stale_job(job, redis_client, stale_after)
+        sweep_stale_job(job, redis_client, stale_seconds)
+        sweep_lost_job(job, redis_client, queue, stale_seconds)
     if not any(job.status == "pending" for job in jobs):
         return {}
-    alive = worker_is_alive(redis_client, stale_after)
+    alive = worker_is_alive(redis_client, stale_seconds)
     return {job.id: waiting_message(job, alive) for job in jobs}
 
 
@@ -56,80 +55,13 @@ def start_training():
         if "model_id" not in data:
             return jsonify({"error": "model_id is required"}), 400
 
-        model_id = data["model_id"]
+        body, status = start_training_job(owner_id, data["model_id"], data)
+        return jsonify(body), status
 
-        # Get model and verify ownership. FOR UPDATE (Postgres; SQLite ignores
-        # it) holds the model row until the commit below, so two concurrent
-        # starts serialise here and the second one's active-job check sees
-        # the first one's job.
-        model = (
-            Model.query.filter_by(id=model_id, owner_id=owner_id).with_for_update().first()
-        )
-        if not model:
-            return jsonify({"error": "Model not found"}), 404
-
-        # D9: one active job per model, so a double-clicked Train is a no-op.
-        active = TrainingJob.query.filter(
-            TrainingJob.model_id == model_id, TrainingJob.status.in_(ACTIVE_JOB_STATUSES)
-        ).first()
-        if active:
-            db.session.rollback()  # release the model row lock
-            return jsonify({"error": "This model is already training", "job_id": active.id}), 409
-
-        # Get dataset
-        dataset = Dataset.query.get(model.dataset_id)
-        if not dataset:
-            return jsonify({"error": "Dataset not found"}), 404
-
-        # Reject incompatible model/dataset pairings with an explanation before
-        # queueing a job that would otherwise fail silently.
-        ok, compat_error = validate_model_task_compatibility(
-            model.model_type, dataset.task_type
-        )
-        if not ok:
-            return jsonify({"error": compat_error}), 400
-
-        # Create training job
-        training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
-
-        db.session.add(training_job)
-
-        # Update model status
-        model.status = "pending"
-
-        db.session.commit()
-
-        # Prepare training task data
-        task_data = {
-            "job_id": training_job.id,
-            "model_id": model_id,
-            "dataset_id": dataset.id,
-            "model_type": model.model_type,
-            "parameters": model.parameters,
-            "dataset_path": dataset.file_path,
-            "task_type": dataset.task_type,
-            "preprocessing_options": data.get("preprocessing_options", {}),
-            "test_size": data.get("test_size", 0.2),
-            "random_state": data.get("random_state", 42),
-        }
-
-        # Add task to Redis queue
-        current_app.redis_client.lpush(current_app.config.get("LEGAL_ML_TRAINING_QUEUE", "training_queue"), json.dumps(task_data))
-
-        return (
-            jsonify(
-                {
-                    "message": "Training started",
-                    "job_id": training_job.id,
-                    "model_id": model_id,
-                }
-            ),
-            200,
-        )
-
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        logger.exception("could not start training")
+        return jsonify({"error": COULD_NOT_START_MESSAGE}), 500
 
 
 @training_bp.route("/status/<job_id>", methods=["GET"])

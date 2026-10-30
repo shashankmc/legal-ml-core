@@ -6,6 +6,7 @@ Every status change goes through `transition`, a guarded
 worker, /stop, or the stale sweep -- can overwrite them. Each transition that
 lands is logged with job id and owner.
 """
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -78,6 +79,51 @@ def sweep_stale_job(job, redis_client, stale_after=DEFAULT_STALE_SECONDS):
         model_status="failed",
         reason="no heartbeat",
         error_message=STALE_JOB_MESSAGE,
+        completed_at=datetime.utcnow(),
+    )
+    if swept:
+        db.session.refresh(job)
+    return swept
+
+
+def _queued_job_id(raw):
+    try:
+        return json.loads(raw).get("job_id")
+    except Exception:
+        return None
+
+
+def sweep_lost_job(job, redis_client, queue, stale_after=DEFAULT_STALE_SECONDS):
+    """A `pending` job past the pickup window that is not in the queue will
+    never run: its start failed before queueing, or Redis lost it. It becomes
+    `failed`, so it neither shows as stuck nor blocks a new start. Returns True
+    if it swept the job. The model only follows when it is left claiming a run
+    that does not exist; one that trained anyway keeps its state."""
+    if job.status != "pending" or job.created_at is None:
+        return False
+    if datetime.utcnow() - job.created_at <= timedelta(seconds=stale_after):
+        return False
+    try:
+        queued = redis_client.lrange(queue, 0, -1)
+    except Exception as e:
+        logger.warning("lost job sweep skipped for job %s: %s", job.id, e)
+        return False
+    if str(job.id) in {_queued_job_id(raw) for raw in queued}:
+        return False
+    model = db.session.get(Model, job.model_id)
+    others_active = TrainingJob.query.filter(
+        TrainingJob.model_id == job.model_id,
+        TrainingJob.id != job.id,
+        TrainingJob.status.in_(ACTIVE_JOB_STATUSES),
+    ).count()
+    stranded = model is not None and model.status == "training" and not others_active
+    swept = transition(
+        job.id,
+        ("pending",),
+        "failed",
+        model_status="failed" if stranded else None,
+        reason="never queued",
+        error_message=COULD_NOT_START_MESSAGE,
         completed_at=datetime.utcnow(),
     )
     if swept:

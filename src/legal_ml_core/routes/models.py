@@ -3,8 +3,19 @@ from ..auth import jwt_required, get_jwt_identity
 from ..db import db
 from ..models import Model, Dataset, TrainingJob
 from ..db_utils import project_belongs_to_owner
+from ..job_state import (
+    ACTIVE_JOB_STATUSES,
+    COULD_NOT_START_MESSAGE,
+    DEFAULT_STALE_SECONDS,
+    sweep_lost_job,
+    transition,
+)
+import logging
 import os
 import json
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 models_bp = Blueprint("models", __name__)
 
@@ -1050,48 +1061,78 @@ def predict(model_id):
         return jsonify({"error": str(e)}), 500
 
 
-@models_bp.route("/<model_id>/train", methods=["POST"])
-@jwt_required()
-def train_model(model_id):
-    """Start training a model"""
-    try:
-        owner_id = get_jwt_identity()
-        data = request.get_json() if request.is_json else {}
+def training_queue():
+    return current_app.config.get("LEGAL_ML_TRAINING_QUEUE", "training_queue")
 
-        # Get model and verify ownership
-        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
-        if not model:
-            return jsonify({"error": "Model not found"}), 404
 
-        # Check if model is already training
-        if model.status == "training":
-            return jsonify({"error": "Model is already being trained"}), 400
+def stale_after():
+    return current_app.config.get("LEGAL_ML_HEARTBEAT_STALE_SECONDS", DEFAULT_STALE_SECONDS)
 
-        # Get dataset
-        dataset = Dataset.query.get(model.dataset_id)
-        if not dataset:
-            return jsonify({"error": "Dataset not found"}), 404
 
-        # Fail fast, with a reason, if this model cannot train on this dataset.
-        ok, compat_error = validate_model_task_compatibility(
-            model.model_type, dataset.task_type
+def _lock_model_and_find_active_job(model_id, owner_id):
+    """FOR UPDATE (Postgres; SQLite ignores it) holds the model row until the
+    caller commits or rolls back, so two concurrent starts serialise here and
+    the second one's active-job check sees the first one's job."""
+    while True:
+        model = (
+            Model.query.filter_by(id=model_id, owner_id=owner_id).with_for_update().first()
         )
-        if not ok:
-            return jsonify({"error": compat_error}), 400
+        if not model:
+            return None, None
+        active = TrainingJob.query.filter(
+            TrainingJob.model_id == model_id, TrainingJob.status.in_(ACTIVE_JOB_STATUSES)
+        ).first()
+        # A lost job is not a run to return. Sweeping commits, which releases
+        # the lock, so look again.
+        if not (
+            active
+            and sweep_lost_job(active, current_app.redis_client, training_queue(), stale_after())
+        ):
+            return model, active
 
-        # Create training job
-        training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
 
-        db.session.add(training_job)
+def start_training_job(owner_id, model_id, data):
+    """The one way a training run starts; both start routes call it. Returns
+    (response body, status). Starting a model with an active job returns that
+    job, and a run that cannot be queued leaves a failed job, never a pending
+    one nothing will pick up."""
+    model, active = _lock_model_and_find_active_job(model_id, owner_id)
+    if not model:
+        return {"error": "Model not found"}, 404
 
-        # Update model status
-        model.status = "training"
+    # D9: one active job per model, so a double-clicked Train is a no-op.
+    if active:
+        job_id = str(active.id)
+        db.session.rollback()  # release the model row lock
+        return (
+            {"message": "Training already started", "job_id": job_id, "model_id": str(model_id)},
+            200,
+        )
 
-        db.session.commit()
+    dataset = db.session.get(Dataset, model.dataset_id)
+    if not dataset:
+        return {"error": "Dataset not found"}, 404
 
-        # Prepare training task data
+    # Fail fast, with a reason, if this model cannot train on this dataset.
+    ok, compat_error = validate_model_task_compatibility(model.model_type, dataset.task_type)
+    if not ok:
+        return {"error": compat_error}, 400
+
+    # Create training job
+    training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
+    db.session.add(training_job)
+
+    # A retrain that cannot start must not cost the model its finished state.
+    status_before = "failed" if model.status == "training" else model.status
+    model.status = "training"
+
+    db.session.commit()
+    job_id = str(training_job.id)
+
+    try:
+        # ids are uuid.UUID on Postgres; the queue message is JSON.
         task_data = {
-            "job_id": str(training_job.id),
+            "job_id": job_id,
             "model_id": str(model_id),
             "dataset_id": str(dataset.id),
             "model_type": model.model_type,
@@ -1102,28 +1143,42 @@ def train_model(model_id):
             "test_size": data.get("test_size", 0.2),
             "random_state": data.get("random_state", 42),
         }
-
-        # Try to add task to Redis queue if available
-        try:
-            current_app.redis_client.lpush(current_app.config.get("LEGAL_ML_TRAINING_QUEUE", "training_queue"), json.dumps(task_data))
-        except Exception as redis_err:
-            # Log Redis error but continue - we still have the job in database
-            current_app.logger.warning(
-                f"Redis error while queuing training task: {str(redis_err)}"
-            )
-
-        return (
-            jsonify(
-                {
-                    "message": "Training started successfully",
-                    "job_id": str(training_job.id),
-                    "model_id": str(model_id),
-                    "model": model.to_dict(),
-                }
-            ),
-            200,
+        current_app.redis_client.lpush(training_queue(), json.dumps(task_data))
+    except Exception:
+        logger.exception("training job %s (owner %s): could not be queued", job_id, owner_id)
+        transition(
+            job_id,
+            ACTIVE_JOB_STATUSES,
+            "failed",
+            model_status=status_before,
+            reason="could not queue",
+            error_message=COULD_NOT_START_MESSAGE,
+            completed_at=datetime.utcnow(),
         )
+        return {"error": COULD_NOT_START_MESSAGE}, 503
 
-    except Exception as e:
+    return (
+        {
+            "message": "Training started",
+            "job_id": job_id,
+            "model_id": str(model_id),
+            "model": model.to_dict(),
+        },
+        200,
+    )
+
+
+@models_bp.route("/<model_id>/train", methods=["POST"])
+@jwt_required()
+def train_model(model_id):
+    """Start training a model"""
+    try:
+        owner_id = get_jwt_identity()
+        data = request.get_json() if request.is_json else {}
+        body, status = start_training_job(owner_id, model_id, data)
+        return jsonify(body), status
+
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        logger.exception("could not start training for model %s", model_id)
+        return jsonify({"error": COULD_NOT_START_MESSAGE}), 500
