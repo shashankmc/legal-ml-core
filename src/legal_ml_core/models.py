@@ -60,6 +60,16 @@ class Dataset(MLBase):
     annotation_tasks = db.relationship(
         "AnnotationTask", backref="dataset", lazy=True, cascade="all, delete-orphan"
     )
+    al_config = db.relationship(
+        "ALConfig", backref="dataset", uselist=False, cascade="all, delete-orphan"
+    )
+    al_rounds = db.relationship(
+        "ALRound",
+        backref="dataset",
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="ALRound.number",
+    )
 
     def to_dict(self):
         annotation_count = len(self.annotation_tasks) if self.annotation_tasks else 0
@@ -214,6 +224,8 @@ class AnnotationTask(MLBase):
         db.String(50), default="pending"
     )  # 'pending', 'annotated', 'skipped'
     label_source = db.Column(db.String(20))  # 'human', 'llm_confirmed', 'llm_bulk'
+    score = db.Column(db.Float)  # how much labelling this helps; higher is served first
+    is_holdout = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -237,8 +249,86 @@ class AnnotationTask(MLBase):
             "annotation_label": self.annotation_label,
             "status": self.status,
             "label_source": self.label_source,
+            "score": self.score,
+            "is_holdout": self.is_holdout,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+        }
+
+
+class ALConfig(MLBase):
+    """A dataset's active learning setup, one row once the loop is started.
+
+    ``holdout_indices`` are row positions in the dataset file, drawn once. Rows
+    labelled in the file have no annotation task, so a task flag cannot hold them.
+    """
+
+    __tablename__ = "al_configs"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    dataset_id = db.Column(
+        db.String(36),
+        db.ForeignKey("datasets.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    model_id = db.Column(db.String(36), db.ForeignKey("models.id", ondelete="SET NULL"))
+    model_type = db.Column(db.String(100), default="logistic_regression", nullable=False)
+    strategy = db.Column(db.String(50), nullable=False)
+    seed_source = db.Column(db.String(20), default="random", nullable=False)  # 'random', 'llm'
+    random_seed = db.Column(db.Integer, default=42, nullable=False)
+    batch_size = db.Column(db.Integer, default=20, nullable=False)
+    min_per_class = db.Column(db.Integer, default=5, nullable=False)
+    holdout_percent = db.Column(db.Integer, default=20, nullable=False)  # 0 turns it off
+    holdout_indices = db.Column(db.JSON)
+    file_label_counts = db.Column(db.JSON)  # per class, labels the file gave the pool
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ALRound(MLBase):
+    """One cycle of label a batch, retrain, rescore the pool."""
+
+    __tablename__ = "al_rounds"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    dataset_id = db.Column(
+        db.String(36), db.ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    number = db.Column(db.Integer, nullable=False)  # 0 is the seed batch
+    status = db.Column(
+        db.String(20), default="labelling", nullable=False
+    )  # 'labelling', 'training', 'scoring', 'completed'
+    strategy = db.Column(db.String(50), nullable=False)
+    model_id = db.Column(db.String(36), db.ForeignKey("models.id", ondelete="SET NULL"))
+    job_id = db.Column(db.String(36), db.ForeignKey("training_jobs.id", ondelete="SET NULL"))
+    labels_used = db.Column(db.Integer)  # confirmed labels this round trained on
+    metrics = db.Column(db.JSON)
+    error = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    completed_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.UniqueConstraint("dataset_id", "number", name="uq_al_round_number"),
+    )
+
+    def to_dict(self):
+        return {
+            "number": self.number,
+            "status": self.status,
+            "strategy": self.strategy,
+            "model_id": self.model_id,
+            "job_id": self.job_id,
+            "labels_used": self.labels_used,
+            "metrics": self.metrics,
+            "error": self.error,
+            "created_at": self.created_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
 
 

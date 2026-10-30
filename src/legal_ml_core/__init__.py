@@ -11,6 +11,8 @@ from .auth import (
 from .blueprint import init_ml_feature
 from .db import MLBase, db, get_db, set_active_db
 from .models import (
+    ALConfig,
+    ALRound,
     AnnotationTask,
     Dataset,
     LLMAcknowledgement,
@@ -59,6 +61,8 @@ __all__ = [
     "TrainingJob",
     "ModelComparison",
     "AnnotationTask",
+    "ALConfig",
+    "ALRound",
     "TrainingMetricPoint",
     "LLMAcknowledgement",
     "LLMCredential",
