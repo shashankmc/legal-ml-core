@@ -4,7 +4,7 @@
   "name": "legal-ml-core",
   "description": "Backend of the Legal Blocks / BAIGLE no-code machine learning workbench for legal text, as an installable Flask extension: dataset upload, validation and EDA; training, prediction and LIME/SHAP explanation for scikit-learn and transformer models; visualization; annotation; and experiment monitoring, shared between the HTTP API process and a Redis-driven training worker.",
   "version": "0.3.0",
-  "dateModified": "2026-10-29",
+  "dateModified": "2026-10-30",
   "datePublished": "2026-10-29",
   "license": "https://spdx.org/licenses/MIT",
   "codeRepository": "https://github.com/shashankmc/legal-ml-core",

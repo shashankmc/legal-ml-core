@@ -10,6 +10,16 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [0.3.0] - 2026-10-30
 
+### Fixed
+
+- Annotation queue: tasks are created for rows with text and a blank label, so
+  the queue is no longer always empty. Summarization is not queued, and saving
+  an empty label is rejected. Saved annotations reach training for
+  classification-family tasks.
+- Training start: one start path. `/training/start` no longer returns a 500 on
+  Postgres, duplicate starts return the active job, a failed start marks its job
+  failed, and stale pending jobs are cleared on read.
+
 ### Added
 
 - LLM annotation under `/api/llm`: suggestions for a batch, standalone annotation
