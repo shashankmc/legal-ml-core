@@ -6,7 +6,7 @@ make the previously-implicit dict shapes explicit, not to add a new
 validation layer that could reject payloads the working code already handles.
 
 Queue names (Redis lists, `LPUSH`/`BRPOP`):
-  training_queue, prediction_queue, explanation_queue, llm_queue
+  training_queue, prediction_queue, explanation_queue, llm_queue, scoring_queue
 
 Result keys (Redis strings/lists, `SETEX`/`LPUSH` + `GET`/`BLPOP`):
   job_status_{job_id}, prediction_result_{prediction_id}, explanation_{explanation_id},
@@ -79,6 +79,16 @@ class TrainingTaskPayload(TypedDict, total=False):
     preprocessing_options: dict
     test_size: float
     random_state: int
+
+
+class ScoringTaskPayload(TypedDict):
+    """Sent once a round's model is saved. The worker rescores the pool."""
+
+    round_id: str
+    dataset_id: str
+    model_id: str
+    model_type: str
+    strategy: str
 
 
 class JobStatusUpdate(TypedDict, total=False):

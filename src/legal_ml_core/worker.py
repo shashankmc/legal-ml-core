@@ -1,4 +1,4 @@
-"""Worker entrypoint: consumes the training/prediction/explanation/LLM Redis queues.
+"""Worker entrypoint: consumes the training/prediction/explanation/LLM/scoring Redis queues.
 
 Runs as its own process (typically its own Docker container), sharing no
 Python objects with the Flask API process, but importing the exact same
@@ -22,6 +22,7 @@ from datetime import datetime
 import redis as redis_lib
 from flask import Flask
 
+from .active_learning.scoring import fail_scoring_round, process_scoring_task
 from .compute.tasks import process_explanation_task, process_prediction_task, process_training_task
 from .db import db, get_db, set_active_db
 from .compute.tasks import REDIS_DOWN_ERRORS
@@ -248,6 +249,22 @@ def _llm_loop(redis_client, app, llm_queue="llm_queue", sleep=time.sleep, stop=N
     _consume(redis_client, llm_queue, handle, on_error, "llm", sleep=sleep, stop=stop)
 
 
+def _scoring_loop(
+    redis_client, model_storage_path, app, scoring_queue="scoring_queue", sleep=time.sleep, stop=None
+):
+    def handle(raw):
+        task_info = json.loads(raw)
+        with app.app_context():
+            process_scoring_task(task_info, model_storage_path)
+
+    def on_error(raw, exc):
+        with app.app_context():
+            db.session.rollback()
+            fail_scoring_round(_parse_field(raw, "round_id"))
+
+    _consume(redis_client, scoring_queue, handle, on_error, "scoring", sleep=sleep, stop=stop)
+
+
 def run_ml_worker(
     redis_url,
     database_url,
@@ -259,6 +276,7 @@ def run_ml_worker(
     liveness=DEFAULT_TIMINGS,
     llm_queue="llm_queue",
     usage_meter=None,
+    scoring_queue="scoring_queue",
 ):
     """Starts the training/prediction/explanation queue-consumer threads.
 
@@ -288,6 +306,7 @@ def run_ml_worker(
         threading.Thread(target=_prediction_loop, args=(redis_client, model_storage_path, app, prediction_queue), daemon=True),
         threading.Thread(target=_explanation_loop, args=(redis_client, model_storage_path, app, explanation_queue), daemon=True),
         threading.Thread(target=_llm_loop, args=(redis_client, app, llm_queue), daemon=True),
+        threading.Thread(target=_scoring_loop, args=(redis_client, model_storage_path, app, scoring_queue), daemon=True),
     ]
     for t in threads:
         t.start()
@@ -295,7 +314,12 @@ def run_ml_worker(
     start_worker_liveness(redis_client, liveness)
 
     logger.info(
-        "legal_ml_core worker running (%s, %s, %s, %s)", training_queue, prediction_queue, explanation_queue, llm_queue
+        "legal_ml_core worker running (%s, %s, %s, %s, %s)",
+        training_queue,
+        prediction_queue,
+        explanation_queue,
+        llm_queue,
+        scoring_queue,
     )
 
     if not block:
