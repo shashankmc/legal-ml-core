@@ -8,6 +8,7 @@ Keycloak stub (conftest `_fake_oidc`) is irrelevant to this mode.
 import time
 
 import jwt
+import pytest
 
 import legal_ml_core.auth as auth
 from legal_ml_core import Dataset, NoOwnerRef, db
@@ -257,3 +258,20 @@ def test_platform_mode_refuses_a_shared_owner_strategy(app, client):
 
     assert resp.status_code == 500
     assert "OWNER_REF" in resp.get_json()["error"]
+
+
+def test_tokens_with_unknown_key_ids_cannot_force_a_jwks_fetch_each(monkeypatch):
+    client = auth._jwks_client("https://idp.example/certs/unknown-kids")
+    fetches = []
+
+    def fetch():
+        fetches.append(1)
+        return {"keys": [{"kty": "oct", "kid": "known", "k": "AAAA", "alg": "HS256"}]}
+
+    monkeypatch.setattr(client, "fetch_data", fetch)
+
+    for i in range(20):
+        with pytest.raises(jwt.PyJWKClientError):
+            client.get_signing_key(f"unknown-{i}")
+
+    assert len(fetches) <= 2  # the first read, and one refresh in the cooldown
