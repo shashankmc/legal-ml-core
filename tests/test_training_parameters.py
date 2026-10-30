@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sklearn.calibration import CalibratedClassifierCV
 
-from legal_ml_core import Dataset, TrainingJob, TrainingMetricPoint, db
+from legal_ml_core import Dataset, Model, TrainingJob, TrainingMetricPoint, db
 from legal_ml_core.compute.tasks import process_training_task
 from legal_ml_core.storage import get_model_path
 from tests.conftest import TEST_USER_ID
@@ -148,6 +148,12 @@ def test_elasticnet_without_a_ratio_mixes_both_penalties(client, auth_headers, a
     assert _fitted(model).l1_ratio == 0.5
 
 
+def test_unlimited_depth_is_the_wizards_untouched_default(client, auth_headers, app, fake_redis, classifying):
+    _, model = _train(client, auth_headers, app, fake_redis, classifying, "decision_tree", {"max_depth": None})
+
+    assert _fitted(model).max_depth is None
+
+
 @pytest.mark.parametrize(
     "model_type, chosen, expected",
     [
@@ -252,3 +258,91 @@ def test_chosen_parameters_cannot_replace_what_the_server_decides(
 
     assert fake_redis.get(f"confusion_matrix_{model_id}") is not None
     assert fake_redis.get("confusion_matrix_someone-elses") is None
+
+
+@pytest.mark.parametrize(
+    "model_type, chosen, named",
+    [
+        ("logistic_regression", {"penalty": "l1", "solver": "lbfgs"}, "liblinear or saga"),
+        ("logistic_regression", {"penalty": "l1"}, "liblinear or saga"),
+        ("logistic_regression", {"penalty": "elasticnet", "solver": "lbfgs"}, "saga"),
+        ("logistic_regression", {"penalty": "elasticnet", "solver": "liblinear"}, "saga"),
+    ],
+)
+def test_a_combination_sklearn_refuses_is_refused_at_creation(
+    client, auth_headers, classifying, model_type, chosen, named
+):
+    response = client.post(
+        "/api/models/",
+        json={"name": "M", "dataset_id": classifying, "model_type": model_type, "parameters": chosen},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert named in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("affinity", ["l1", "manhattan"])
+def test_ward_linkage_needs_euclidean_distance(client, auth_headers, clustering, affinity):
+    response = client.post(
+        "/api/models/",
+        json={"name": "M", "dataset_id": clustering, "model_type": "hierarchical", "parameters": {"linkage": "ward", "affinity": affinity}},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "euclidean" in response.get_json()["error"]
+
+
+def test_a_legalbert_variant_that_does_not_exist_is_not_offered(client, auth_headers, classifying):
+    catalogue = client.get("/api/models/available", headers=auth_headers).get_json()["models"]
+    assert catalogue["transformer"]["legalbert"]["parameters"]["model_name"]["options"] == [
+        "nlpaueb/legal-bert-base-uncased"
+    ]
+
+    response = client.post(
+        "/api/models/",
+        json={"name": "M", "dataset_id": classifying, "model_type": "legalbert", "parameters": {"model_name": "lex_glue"}},
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+
+
+def test_a_model_cannot_be_edited_into_a_refused_combination(client, auth_headers, classifying):
+    created = client.post(
+        "/api/models/",
+        json={"name": "M", "dataset_id": classifying, "model_type": "logistic_regression", "parameters": {}},
+        headers=auth_headers,
+    )
+
+    response = client.put(
+        f"/api/models/{created.get_json()['model']['id']}",
+        json={"parameters": {"penalty": "l1", "solver": "lbfgs"}},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "liblinear or saga" in response.get_json()["error"]
+
+
+def test_a_model_saved_with_a_refused_combination_does_not_queue(client, auth_headers, app, fake_redis, classifying):
+    """Models from before the combination was refused, trained on defaults then."""
+    with app.app_context():
+        model = Model(
+            owner_id=TEST_USER_ID,
+            dataset_id=classifying,
+            name="Old",
+            model_type="logistic_regression",
+            parameters={"penalty": "elasticnet", "solver": "lbfgs"},
+            status="completed",
+        )
+        db.session.add(model)
+        db.session.commit()
+        model_id = model.id
+
+    response = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
+
+    assert response.status_code == 400
+    assert "saga" in response.get_json()["error"]
+    assert fake_redis.llen("training_queue") == 0
+    assert db.session.get(Model, model_id).status == "completed"

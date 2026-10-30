@@ -172,7 +172,14 @@ AVAILABLE_MODELS = {
                     "type": "select",
                     "options": ["liblinear", "lbfgs", "saga"],
                     "default": "lbfgs",
-                    "description": "Optimization algorithm",
+                    "description": "Optimisation algorithm",
+                },
+                "l1_ratio": {
+                    "type": "float",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "default": 0.5,
+                    "description": "Share of l1 in the elasticnet penalty",
                 },
                 "class_weight": CLASS_WEIGHT_PARAMETER,
             },
@@ -341,7 +348,7 @@ AVAILABLE_MODELS = {
             "parameters": {
                 "model_name": {
                     "type": "select",
-                    "options": ["nlpaueb/legal-bert-base-uncased", "lex_glue"],
+                    "options": ["nlpaueb/legal-bert-base-uncased"],
                     "default": "nlpaueb/legal-bert-base-uncased",
                     "description": "LegalBERT variant",
                 },
@@ -468,6 +475,52 @@ def validate_model_task_compatibility(model_type, task_type):
     return True, None
 
 
+def _combination_refusal(model_type, parameters):
+    """Why these values cannot train together, or None. Each pair here is one
+    scikit-learn refuses when it fits, which is too late to tell the user."""
+    if model_type == "logistic_regression":
+        penalty = parameters.get("penalty", "l2")
+        solver = parameters.get("solver", "lbfgs")
+        if penalty == "l1" and solver not in ("liblinear", "saga"):
+            return "The l1 penalty needs the liblinear or saga solver."
+        if penalty == "elasticnet" and solver != "saga":
+            return "The elasticnet penalty needs the saga solver."
+    if model_type == "hierarchical":
+        distance = parameters.get("affinity", "euclidean")
+        if parameters.get("linkage", "ward") == "ward" and distance not in ("euclidean", "l2"):
+            return "Ward linkage needs euclidean or l2 distance."
+    return None
+
+
+def parameter_refusal(model_type, parameters):
+    """Why these parameters cannot train this model type, or None."""
+    if not isinstance(parameters, dict):
+        return "parameters must be an object"
+
+    expected_params = AVAILABLE_MODELS[model_category_for(model_type)][model_type]["parameters"]
+
+    # Validate parameter types
+    for param_name, param_value in parameters.items():
+        if param_name not in expected_params:
+            continue
+        param_config = expected_params[param_name]
+        param_type = param_config["type"]
+
+        # "No limit" (e.g. max_depth) is a choice, and the wizard's default.
+        if param_value is None and param_config["default"] is None:
+            continue
+        if param_type == "int" and not isinstance(param_value, int):
+            return f"Parameter {param_name} must be an integer"
+        if param_type == "float" and not isinstance(param_value, (int, float)):
+            return f"Parameter {param_name} must be a number"
+        if param_type == "boolean" and not isinstance(param_value, bool):
+            return f"Parameter {param_name} must be a boolean"
+        if param_type == "select" and param_value not in param_config["options"]:
+            return f'Parameter {param_name} must be one of: {", ".join(param_config["options"])}'
+
+    return _combination_refusal(model_type, parameters)
+
+
 @models_bp.route("/available", methods=["GET"])
 @jwt_required()
 def get_available_models():
@@ -584,51 +637,9 @@ def create_model():
             return jsonify({"error": compat_error}), 400
 
         # Validate parameters
-        if model_type in AVAILABLE_MODELS.get(model_category, {}):
-            expected_params = AVAILABLE_MODELS[model_category][model_type]["parameters"]
-            provided_params = data["parameters"]
-
-            # Validate parameter types and ranges
-            for param_name, param_value in provided_params.items():
-                if param_name in expected_params:
-                    param_config = expected_params[param_name]
-                    param_type = param_config["type"]
-
-                    if param_type == "int" and not isinstance(param_value, int):
-                        return (
-                            jsonify(
-                                {"error": f"Parameter {param_name} must be an integer"}
-                            ),
-                            400,
-                        )
-                    elif param_type == "float" and not isinstance(
-                        param_value, (int, float)
-                    ):
-                        return (
-                            jsonify(
-                                {"error": f"Parameter {param_name} must be a number"}
-                            ),
-                            400,
-                        )
-                    elif param_type == "boolean" and not isinstance(param_value, bool):
-                        return (
-                            jsonify(
-                                {"error": f"Parameter {param_name} must be a boolean"}
-                            ),
-                            400,
-                        )
-                    elif (
-                        param_type == "select"
-                        and param_value not in param_config["options"]
-                    ):
-                        return (
-                            jsonify(
-                                {
-                                    "error": f'Parameter {param_name} must be one of: {", ".join(param_config["options"])}'
-                                }
-                            ),
-                            400,
-                        )
+        refusal = parameter_refusal(model_type, data["parameters"])
+        if refusal:
+            return jsonify({"error": refusal}), 400
 
         # Resolve project_id: explicit payload value takes precedence over dataset's project.
         # `Project` belongs to the host app, not this package, so existence is checked via
@@ -684,6 +695,9 @@ def update_model(model_id):
 
         # Update parameters if provided
         if "parameters" in data:
+            refusal = parameter_refusal(model.model_type, data["parameters"])
+            if refusal:
+                return jsonify({"error": refusal}), 400
             model.parameters = data["parameters"]
 
         db.session.commit()
@@ -1148,6 +1162,12 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
     ok, compat_error = validate_model_task_compatibility(model.model_type, dataset.task_type)
     if not ok:
         return {"error": compat_error}, 400
+
+    # A Model saved before a combination was refused must not reach the worker.
+    refusal = parameter_refusal(model.model_type, model.parameters or {})
+    if refusal:
+        db.session.rollback()  # release the model row lock
+        return {"error": refusal}, 400
 
     # Create training job
     training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
