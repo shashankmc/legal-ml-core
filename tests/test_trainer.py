@@ -38,6 +38,25 @@ def test_train_classification_model_all_algorithms(fake_redis, classification_df
     assert fake_redis.get("confusion_matrix_test-model-1") is not None
 
 
+def _fitted_estimator(trainer):
+    return getattr(trainer.model, "estimator", trainer.model)
+
+
+@pytest.mark.parametrize(
+    "model_type", ["svm", "decision_tree", "random_forest", "logistic_regression"]
+)
+@pytest.mark.parametrize("chosen, expected", [("balanced", "balanced"), ("none", None)])
+def test_class_weight_reaches_the_estimator(fake_redis, classification_df, model_type, chosen, expected):
+    trainer = MLModelTrainer(redis_client=fake_redis)
+    texts, labels, _ = trainer.preprocess_data(classification_df, "classification", {})
+
+    trainer.train_classification_model(
+        texts, labels, model_type, {"model_id": "weighted", "class_weight": chosen}
+    )
+
+    assert _fitted_estimator(trainer).class_weight == expected
+
+
 @pytest.mark.parametrize("model_type", ["kmeans", "hierarchical", "dbscan"])
 def test_train_clustering_model(fake_redis, classification_df, model_type):
     trainer = MLModelTrainer(redis_client=fake_redis)

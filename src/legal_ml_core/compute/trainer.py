@@ -157,6 +157,10 @@ class MLModelTrainer:
             X, labels, test_size=0.2, random_state=42, stratify=labels
         )
 
+        # "none" is the catalogue's name for sklearn's default of equal weights.
+        class_weight = parameters.get("class_weight")
+        class_weight = None if class_weight == "none" else class_weight
+
         # Create model based on type
         if model_type == "svm":
             # SVM scores are not probabilities: SVC without probability=True has
@@ -168,6 +172,7 @@ class MLModelTrainer:
                 gamma=parameters.get("gamma", "scale"),
                 degree=parameters.get("degree", 3),
                 probability=True,
+                class_weight=class_weight,
                 random_state=42,
             )
         elif model_type == "decision_tree":
@@ -176,6 +181,7 @@ class MLModelTrainer:
                 min_samples_split=parameters.get("min_samples_split", 2),
                 min_samples_leaf=parameters.get("min_samples_leaf", 1),
                 criterion=parameters.get("criterion", "gini"),
+                class_weight=class_weight,
                 random_state=42,
             )
         elif model_type == "random_forest":
@@ -184,6 +190,7 @@ class MLModelTrainer:
                 max_depth=parameters.get("max_depth"),
                 min_samples_split=parameters.get("min_samples_split", 2),
                 min_samples_leaf=parameters.get("min_samples_leaf", 1),
+                class_weight=class_weight,
                 random_state=42,
             )
         elif model_type == "naive_bayes":
@@ -196,6 +203,7 @@ class MLModelTrainer:
                 C=parameters.get("C", 1.0),
                 penalty=parameters.get("penalty", "l2"),
                 solver=parameters.get("solver", "lbfgs"),
+                class_weight=class_weight,
                 random_state=42,
             )
         else:

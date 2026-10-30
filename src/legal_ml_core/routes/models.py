@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 
 models_bp = Blueprint("models", __name__)
 
+# Rare labels count for more in training. Multinomial naive Bayes has no such option.
+CLASS_WEIGHT_PARAMETER = {
+    "type": "select",
+    "options": ["none", "balanced"],
+    "default": "none",
+    "description": "Give rare labels more weight in training",
+}
+
 # Available model types and their parameters
 AVAILABLE_MODELS = {
     "classification": {
@@ -53,6 +61,7 @@ AVAILABLE_MODELS = {
                     "default": 3,
                     "description": "Degree for polynomial kernel",
                 },
+                "class_weight": CLASS_WEIGHT_PARAMETER,
             },
         },
         "decision_tree": {
@@ -86,6 +95,7 @@ AVAILABLE_MODELS = {
                     "default": "gini",
                     "description": "Split criterion",
                 },
+                "class_weight": CLASS_WEIGHT_PARAMETER,
             },
         },
         "random_forest": {
@@ -120,6 +130,7 @@ AVAILABLE_MODELS = {
                     "default": 1,
                     "description": "Minimum samples per leaf",
                 },
+                "class_weight": CLASS_WEIGHT_PARAMETER,
             },
         },
         "naive_bayes": {
@@ -163,6 +174,7 @@ AVAILABLE_MODELS = {
                     "default": "lbfgs",
                     "description": "Optimization algorithm",
                 },
+                "class_weight": CLASS_WEIGHT_PARAMETER,
             },
         },
     },

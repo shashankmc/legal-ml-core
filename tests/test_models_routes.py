@@ -27,6 +27,14 @@ def test_get_available_models_catalog(client, auth_headers):
     assert "svm" in body["models"]["classification"]
 
 
+def test_catalog_offers_class_weight_only_where_the_estimator_supports_it(client, auth_headers):
+    classifiers = client.get("/api/models/available", headers=auth_headers).get_json()["models"]["classification"]
+
+    for model_type in ("svm", "decision_tree", "random_forest", "logistic_regression"):
+        assert classifiers[model_type]["parameters"]["class_weight"]["options"] == ["none", "balanced"]
+    assert "class_weight" not in classifiers["naive_bayes"]["parameters"]
+
+
 def test_get_available_models_filtered_by_task_type(client, auth_headers):
     resp = client.get("/api/models/available?task_type=clustering", headers=auth_headers)
     assert resp.status_code == 200

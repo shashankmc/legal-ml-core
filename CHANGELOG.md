@@ -8,11 +8,21 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `class_weight` parameter (`none` or `balanced`) for SVM, decision tree, random
+  forest and logistic regression, in the trainer and the model catalogue.
+
 ### Fixed
 
 - `/api/training/batch-predict` is served: the worker now consumes
   `batch_prediction_queue`, through `run_ml_worker(batch_prediction_queue=...)`.
   Before this, tasks stayed queued and the polling route answered 404.
+
+### Security
+
+- Requires PyJWT 2.15, whose JWKS client limits refreshes, so tokens with unknown
+  key ids cannot force a fetch each. A test pins it.
 
 ## [0.4.0] - 2026-10-30
 
