@@ -31,6 +31,9 @@ QUEUED_TASK_TYPES = TRAINED_ON_LABELS | {"ner", "named_entity_recognition"}
 # Label sources an LLM had a hand in. Holdout metrics rest on human labels only.
 LLM_LABEL_SOURCES = ("llm_confirmed", "llm_bulk")
 
+# The trainer's stratified split needs two of a class: one a side.
+MIN_TO_SPLIT = 2
+
 # Key on the text column's entry in ``Dataset.columns``: how many rows of the file
 # need a label. The host reads it too, so both count what the queue would offer.
 ROWS_TO_LABEL = "rows_to_label"
@@ -184,7 +187,8 @@ def apply_saved_annotations(df, dataset):
     """``df`` as its text and label columns, in the order the trainer reads them.
 
     Saved annotations become labels and still-unlabelled rows are dropped, as
-    are held-out rows: they grade the model, so it must never see them.
+    are held-out rows: they grade the model, so it must never see them. In a loop,
+    so is a class with one example, as the split cannot place it; the loop says so.
     """
     if dataset is None or dataset.task_type not in TRAINED_ON_LABELS:
         return df
@@ -204,4 +208,8 @@ def apply_saved_annotations(df, dataset):
     if text_column is None:
         text_column = df.columns[0]
     keep = ~_is_blank(df[label_column]) & ~df.index.isin(_holdout_of(dataset))
-    return df.loc[keep, [text_column, label_column]].reset_index(drop=True)
+    df = df.loc[keep, [text_column, label_column]]
+    if dataset.al_config is not None:
+        labels = df[label_column].astype(str)
+        df = df[labels.map(labels.value_counts()) >= MIN_TO_SPLIT]
+    return df.reset_index(drop=True)

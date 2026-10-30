@@ -229,16 +229,18 @@ class MLModelTrainer:
         y_pred = self.model.predict(X_test)
 
         label_names = self.label_encoder.classes_.tolist() if self.label_encoder else None
+        # A class of two can land wholly on the training side of the split.
+        every_class = list(range(len(label_names))) if label_names else None
         metrics = {
             "accuracy": accuracy_score(y_test, y_pred),
             "precision": precision_score(y_test, y_pred, average="weighted", zero_division=0),
             "recall": recall_score(y_test, y_pred, average="weighted", zero_division=0),
             "f1_score": f1_score(y_test, y_pred, average="weighted", zero_division=0),
-            "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
+            "confusion_matrix": confusion_matrix(y_test, y_pred, labels=every_class).tolist(),
             "confusion_matrix_labels": label_names,
             "classification_report": classification_report(
                 y_test, y_pred, zero_division=0,
-                target_names=label_names
+                labels=every_class, target_names=label_names
             ),
             "probabilities_calibrated": calibrated,
         }
@@ -498,16 +500,18 @@ class MLModelTrainer:
         y_pred = predictions.predictions.argmax(-1)
 
         label_names = self.label_encoder.classes_.tolist() if self.label_encoder else None
+        # A class of two can land wholly on the training side of the split.
+        every_class = list(range(len(label_names))) if label_names else None
         metrics = {
             "accuracy": float(eval_results.get("eval_accuracy", accuracy_score(y_test, y_pred))),
             "precision": float(eval_results.get("eval_precision", precision_score(y_test, y_pred, average="weighted", zero_division=0))),
             "recall": float(eval_results.get("eval_recall", recall_score(y_test, y_pred, average="weighted", zero_division=0))),
             "f1_score": float(eval_results.get("eval_f1_score", f1_score(y_test, y_pred, average="weighted", zero_division=0))),
-            "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
+            "confusion_matrix": confusion_matrix(y_test, y_pred, labels=every_class).tolist(),
             "confusion_matrix_labels": label_names,
             "classification_report": classification_report(
                 y_test, y_pred, zero_division=0,
-                target_names=label_names
+                labels=every_class, target_names=label_names
             ),
         }
 

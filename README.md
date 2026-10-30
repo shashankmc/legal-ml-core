@@ -57,6 +57,8 @@ items for labelling and `POST /datasets/<id>/verify` grades the saved model.
 Host config: `LEGAL_ML_AL_STRATEGIES` (allowed list, default all five),
 `LEGAL_ML_AL_DEFAULT_STRATEGY` (default `prediction_entropy`),
 `LEGAL_ML_AL_BATCH_SIZE` (20), `LEGAL_ML_AL_MIN_PER_CLASS` (5, also the floor),
+`LEGAL_ML_AL_CAP_BATCHES` (5: past this many batches of labels, a class short of
+its minimum no longer holds training back),
 `LEGAL_ML_AL_HOLDOUT_PERCENT` (20), `LEGAL_ML_AL_SCORING_STALE_SECONDS` (3600, how
 long a round waits for the scoring worker before it is called lost),
 `LEGAL_ML_SCORING_QUEUE` (`scoring_queue`, the same name passed to

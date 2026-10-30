@@ -11,6 +11,7 @@ from flask import current_app
 
 from ..annotation_queue import (
     LLM_LABEL_SOURCES,
+    MIN_TO_SPLIT,
     TRAINED_ON_LABELS,
     create_annotation_tasks,
     file_labels,
@@ -29,6 +30,9 @@ DEFAULT_BATCH_SIZE = 20
 # Below this the trainer's stratified 80/20 split cannot hold every class in its
 # test side, so it is the floor as well as the default.
 MIN_PER_CLASS = 5
+# The cap on labels, in batches: past it, a rare class no longer holds training
+# back. It is what ends a loop on a class the Dataset has too few of.
+DEFAULT_CAP_BATCHES = 5
 # How long a round may wait for the scoring worker before it is called lost. It
 # is far above the heartbeat window, as a large pool takes a while to score.
 DEFAULT_SCORING_STALE_SECONDS = 3600
@@ -58,8 +62,16 @@ def default_strategy(config=None):
     return config.get("LEGAL_ML_AL_DEFAULT_STRATEGY") or DEFAULT_STRATEGY
 
 
+def _cap_batches(config=None):
+    config = current_app.config if config is None else config
+    return config.get("LEGAL_ML_AL_CAP_BATCHES") or DEFAULT_CAP_BATCHES
+
+
 def validate_host_config(config):
     """Fail at import, not on a user's first click, on a bad host setting."""
+    cap_batches = config.get("LEGAL_ML_AL_CAP_BATCHES")
+    if cap_batches is not None and (not isinstance(cap_batches, int) or cap_batches < 1):
+        raise ValueError("LEGAL_ML_AL_CAP_BATCHES must be a whole number above zero")
     allowed = allowed_strategies(config)
     unknown = [name for name in allowed if name not in STRATEGIES]
     if unknown:
@@ -86,6 +98,7 @@ def settings():
         "default_strategy": default_strategy(),
         "default_batch_size": _host_batch_size(),
         "min_per_class": _host_min_per_class(),
+        "cap_batches": _cap_batches(),
         "default_holdout_percent": _host_holdout_percent(),
         "max_holdout_percent": MAX_HOLDOUT_PERCENT,
         # The LLM seed arrives with LLM assistance in the builder (BAIGLE #67).
@@ -313,15 +326,43 @@ def _settle_round(round_row):
             fail_scoring_round(round_row.id)
 
 
-def _label_shortfall(dataset, config, counts):
-    """``(labels short of the minimum, how short; whether a second label is missing)``."""
-    classes = set(dataset.labels or []) | set(counts)
-    classes_short = {
-        name: config.min_per_class - counts[name]
-        for name in sorted(classes)
-        if counts[name] < config.min_per_class
+def _examples_to_split(classes):
+    """The fewest examples whose 20% test side can hold each of ``classes`` once."""
+    return 5 * classes - 4
+
+
+def _training_readiness(dataset, config, counts):
+    """What these confirmed labels allow. Only the counts decide: a class exists
+    once it has a label, whatever it is called and however many there are."""
+    seen = {str(name): n for name, n in counts.items() if n > 0}
+    trainable = [n for n in seen.values() if n >= MIN_TO_SPLIT]
+    return {
+        "labels_total": sum(seen.values()),
+        "label_cap": config.batch_size * _cap_batches(),
+        "classes_short": {
+            name: config.min_per_class - n for name, n in sorted(seen.items()) if n < config.min_per_class
+        },
+        "classes_left_out": sorted(name for name, n in seen.items() if n < MIN_TO_SPLIT),
+        "classes_unseen": sorted(set(dataset.labels or []) - set(seen)),
+        "needs_second_label": len(trainable) < 2,
+        "classes_to_train": len(trainable),
+        "labels_needed": max(_examples_to_split(len(trainable)) - sum(trainable), 0),
     }
-    return classes_short, len(classes) < 2
+
+
+def _refusal(config, readiness):
+    """Why these labels cannot train, else ``None``."""
+    if readiness["classes_short"] and readiness["labels_total"] < readiness["label_cap"]:
+        return (
+            f"Each label needs at least {config.min_per_class} examples before training, "
+            f"or {readiness['label_cap']} labels in all."
+        )
+    if readiness["needs_second_label"]:
+        return "Training needs at least 2 examples each of two labels."
+    if readiness["labels_needed"]:
+        classes = readiness["classes_to_train"]
+        return f"With {classes} labels, training needs at least {_examples_to_split(classes)} examples in all."
+    return None
 
 
 def training_refusal(dataset):
@@ -330,26 +371,20 @@ def training_refusal(dataset):
     config = ALConfig.query.filter_by(dataset_id=str(dataset.id)).first()
     if config is None:
         return None
-    classes_short, needs_second_label = _label_shortfall(dataset, config, _confirmed_label_counts(config))
-    if classes_short:
-        return f"Each label needs at least {config.min_per_class} examples before training."
-    if needs_second_label:
-        return "Training needs examples of at least two labels."
-    return None
+    return _refusal(config, _training_readiness(dataset, config, _confirmed_label_counts(config)))
 
 
 def _retrain_state(dataset, config, round_row, counts):
     trained = sum(counts.values())
     new_labels = max(trained - _labels_at_last_train(config.dataset_id), 0)
-    classes_short, needs_second_label = _label_shortfall(dataset, config, counts)
+    readiness = _training_readiness(dataset, config, counts)
     running = round_row.status in ACTIVE_ROUND_STATUSES
-    allowed = new_labels > 0 and not running and not classes_short and not needs_second_label
+    allowed = new_labels > 0 and not running and _refusal(config, readiness) is None
     return {
         "new_labels": new_labels,
         "allowed": allowed,
         "suggested": allowed and new_labels >= config.batch_size,
-        "classes_short": classes_short,
-        "needs_second_label": needs_second_label,
+        **readiness,
     }
 
 

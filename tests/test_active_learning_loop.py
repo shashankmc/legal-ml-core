@@ -296,10 +296,12 @@ def test_retrain_is_refused_until_every_class_has_its_minimum(client, auth_heade
     body = state(client, auth_headers, dataset_id)["retrain"]
     assert body["allowed"] is False
     assert body["suggested"] is False
-    assert body["classes_short"] == {"criminal": 5}
+    assert body["classes_short"] == {}
+    assert body["classes_unseen"] == ["criminal"]
+    assert body["needs_second_label"] is True
     resp = retrain(client, auth_headers, dataset_id)
     assert resp.status_code == 409
-    assert resp.get_json()["error"] == "Each label needs at least 5 examples before training."
+    assert resp.get_json()["error"] == "Training needs at least 2 examples each of two labels."
 
 
 def test_retrain_opens_once_every_class_has_its_minimum(client, auth_headers, app, tmp_path):
@@ -474,6 +476,7 @@ def _outside_model(dataset_id):
 def test_train_routes_keep_the_minimum_for_a_dataset_in_a_loop(client, auth_headers, app, tmp_path, fake_redis):
     dataset_id = _named_label_loop(client, auth_headers, app, tmp_path)
     label_next(client, auth_headers, dataset_id, _all("civil"), 5)
+    label_next(client, auth_headers, dataset_id, _all("criminal"), 2)
     model_id = _outside_model(dataset_id)
 
     by_model = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
@@ -481,12 +484,13 @@ def test_train_routes_keep_the_minimum_for_a_dataset_in_a_loop(client, auth_head
 
     for resp in (by_model, by_start):
         assert resp.status_code == 409
-        assert resp.get_json()["error"] == "Each label needs at least 5 examples before training."
+        assert resp.get_json()["error"] == "Each label needs at least 5 examples before training, or 100 labels in all."
     assert fake_redis.llen("training_queue") == 0
 
 
 def test_a_model_cannot_be_created_below_the_minimum(client, auth_headers, app, tmp_path):
     dataset_id = _named_label_loop(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, _all("civil"), 1)
 
     resp = client.post(
         "/api/models/",
@@ -495,7 +499,7 @@ def test_a_model_cannot_be_created_below_the_minimum(client, auth_headers, app, 
     )
 
     assert resp.status_code == 409
-    assert resp.get_json()["error"] == "Each label needs at least 5 examples before training."
+    assert resp.get_json()["error"] == "Each label needs at least 5 examples before training, or 100 labels in all."
     assert Model.query.filter_by(dataset_id=dataset_id).count() == 0
 
 
