@@ -10,10 +10,15 @@ import logging
 import pytest
 import redis as redis_lib
 
-from legal_ml_core import Model, TrainingJob, db
+import pandas as pd
+
+from legal_ml_core import Dataset, Model, TrainingJob, db
+from legal_ml_core.compute.trainer import MLModelTrainer
 from legal_ml_core.queue_contract import job_status_key
+from legal_ml_core.storage import get_model_path
 from legal_ml_core.worker import (
     LOOP_ERROR_MESSAGE,
+    _batch_prediction_loop,
     _explanation_loop,
     _prediction_loop,
     _training_loop,
@@ -62,6 +67,88 @@ def test_malformed_training_task_fails_its_job_and_the_loop_keeps_serving(
     assert any(broken_id in line for line in loop_logs)
 
 
+@pytest.fixture
+def completed_model(app, fake_redis):
+    """A saved naive Bayes Model, ready for prediction."""
+    with app.app_context():
+        dataset = Dataset(
+            owner_id=TEST_USER_ID, name="D", file_path="/tmp/d.csv", row_count=8, columns=[],
+            task_type="classification",
+        )
+        db.session.add(dataset)
+        db.session.flush()
+        model = Model(
+            owner_id=TEST_USER_ID, dataset_id=dataset.id, name="M", model_type="naive_bayes",
+            status="completed",
+        )
+        db.session.add(model)
+        db.session.commit()
+        trainer = MLModelTrainer(redis_client=fake_redis)
+        df = pd.DataFrame(
+            {
+                "text": ["the court ruled for the plaintiff", "the defendant was liable"] * 4,
+                "label": ["civil", "criminal"] * 4,
+            }
+        )
+        texts, labels, _ = trainer.preprocess_data(df, "classification", {})
+        trainer.train_classification_model(texts, labels, "naive_bayes", {"model_id": model.id})
+        trainer.save_model(get_model_path(app.config["MODEL_FOLDER"], model.id))
+        return model.id
+
+
+def _queue_batch(client, auth_headers, model_id, texts):
+    response = client.post(
+        "/api/training/batch-predict",
+        json={"model_id": model_id, "texts": texts},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    return response.get_json()["batch_id"]
+
+
+def _serve_batches(app, fake_redis):
+    _batch_prediction_loop(
+        fake_redis,
+        app.config["MODEL_FOLDER"],
+        app,
+        stop=_until_drained(fake_redis, "batch_prediction_queue"),
+        sleep=lambda s: None,
+    )
+
+
+def test_a_queued_batch_prediction_is_served_to_its_owner(
+    client, auth_headers, app, fake_redis, completed_model
+):
+    batch_id = _queue_batch(client, auth_headers, completed_model, ["the plaintiff", "the defendant"])
+
+    _serve_batches(app, fake_redis)
+
+    response = client.get(f"/api/training/batch-prediction/{batch_id}", headers=auth_headers)
+    assert response.status_code == 200
+    batch = response.get_json()["batch_prediction"]
+    assert batch["status"] == "completed"
+    assert [p["text"] for p in batch["predictions"]] == ["the plaintiff", "the defendant"]
+    assert {p["prediction"] for p in batch["predictions"]} <= {"civil", "criminal"}
+
+
+def test_a_batch_that_cannot_run_reports_failure_and_the_loop_keeps_serving(
+    client, auth_headers, app, fake_redis, completed_model
+):
+    broken = _queue_batch(client, auth_headers, completed_model, ["the plaintiff"])
+    task = fake_redis.lpop("batch_prediction_queue")
+    fake_redis.lpush("batch_prediction_queue", task.replace(completed_model, "gone"))
+    served_after = _queue_batch(client, auth_headers, completed_model, ["the plaintiff"])
+    fake_redis.rpush("batch_prediction_queue", "not json at all")  # served first
+
+    _serve_batches(app, fake_redis)
+
+    failed = client.get(f"/api/training/batch-prediction/{broken}", headers=auth_headers)
+    served = client.get(f"/api/training/batch-prediction/{served_after}", headers=auth_headers)
+    assert failed.get_json()["batch_prediction"]["status"] == "failed"
+    assert "gone" not in failed.get_data(as_text=True)
+    assert served.get_json()["batch_prediction"]["status"] == "completed"
+
+
 class _FlakyRedis:
     """BRPOP fails `down_for` times with a connection error, then works
     (empty queue). Counts calls so `stop` can end the loop after recovery."""
@@ -79,7 +166,12 @@ class _FlakyRedis:
 
 @pytest.mark.parametrize(
     "loop, name",
-    [(_training_loop, "training"), (_prediction_loop, "prediction"), (_explanation_loop, "explanation")],
+    [
+        (_training_loop, "training"),
+        (_prediction_loop, "prediction"),
+        (_explanation_loop, "explanation"),
+        (_batch_prediction_loop, "batch prediction"),
+    ],
 )
 def test_unreachable_redis_backs_off_1s_to_30s_and_logs_once_per_change(app, caplog, loop, name):
     caplog.set_level(logging.INFO, logger="legal_ml_core")

@@ -8,6 +8,12 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `/api/training/batch-predict` is served: the worker now consumes
+  `batch_prediction_queue`, through `run_ml_worker(batch_prediction_queue=...)`.
+  Before this, tasks stayed queued and the polling route answered 404.
+
 ## [0.4.0] - 2026-10-30
 
 ### Added

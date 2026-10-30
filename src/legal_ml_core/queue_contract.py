@@ -34,6 +34,7 @@ JOB_CANCEL_TTL_SECONDS = 24 * 3600
 JOB_STATUS_TTL_SECONDS = 3600
 
 PREDICTION_RESULT_TTL_SECONDS = 300
+BATCH_PREDICTION_RESULT_TTL_SECONDS = 1800
 EXPLANATION_RESULT_TTL_SECONDS = 3600
 LLM_JOB_STATUS_TTL_SECONDS = 24 * 3600
 
@@ -54,6 +55,10 @@ def job_cancel_key(job_id):
 
 def prediction_result_key(prediction_id):
     return f"prediction_result_{prediction_id}"
+
+
+def batch_prediction_result_key(batch_id):
+    return f"batch_prediction_result_{batch_id}"
 
 
 def explanation_result_key(explanation_id):

@@ -257,6 +257,7 @@ def test_run_ml_worker_publishes_liveness(monkeypatch, fake_redis):
     monkeypatch.setattr(worker, "_training_loop", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_prediction_loop", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_explanation_loop", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_batch_prediction_loop", lambda *a, **k: None)
 
     started = []
     real_start = worker.start_worker_liveness

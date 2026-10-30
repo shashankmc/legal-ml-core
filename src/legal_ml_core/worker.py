@@ -1,4 +1,4 @@
-"""Worker entrypoint: consumes the training/prediction/explanation/LLM/scoring Redis queues.
+"""Worker entrypoint: consumes the training/prediction/batch prediction/explanation/LLM/scoring Redis queues.
 
 Runs as its own process (typically its own Docker container), sharing no
 Python objects with the Flask API process, but importing the exact same
@@ -30,9 +30,11 @@ from .job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from .liveness import DEFAULT_TIMINGS, start_worker_liveness
 from .llm.suggest import fail_llm_job, process_llm_annotation_task
 from .queue_contract import (
+    BATCH_PREDICTION_RESULT_TTL_SECONDS,
     EXPLANATION_RESULT_TTL_SECONDS,
     JOB_STATUS_TTL_SECONDS,
     PREDICTION_RESULT_TTL_SECONDS,
+    batch_prediction_result_key,
     explanation_result_key,
     job_status_key,
     prediction_result_key,
@@ -41,6 +43,7 @@ from .queue_contract import (
 logger = logging.getLogger(__name__)
 
 LOOP_ERROR_MESSAGE = COULD_NOT_START_MESSAGE
+BATCH_PREDICTION_FAILED_MESSAGE = "This batch could not be predicted. Try again."
 
 
 def _build_worker_app(database_url):
@@ -209,6 +212,38 @@ def _prediction_loop(
     _consume(redis_client, prediction_queue, handle, on_error, "prediction", sleep=sleep, stop=stop)
 
 
+def _batch_prediction_loop(
+    redis_client, model_storage_path, app, batch_prediction_queue="batch_prediction_queue", sleep=time.sleep, stop=None
+):
+    def store(batch_id, record):
+        redis_client.setex(
+            batch_prediction_result_key(batch_id), BATCH_PREDICTION_RESULT_TTL_SECONDS, json.dumps(record)
+        )
+
+    def handle(raw):
+        task_info = json.loads(raw)
+        batch_id = task_info["batch_id"]
+        with app.app_context():
+            result = process_prediction_task({**task_info, "prediction_id": batch_id}, model_storage_path)
+        # The owner_id is what lets the polling route check who is asking.
+        store(batch_id, {**result, "status": "completed", "owner_id": task_info["owner_id"]})
+        logger.info("batch prediction completed (%s)", batch_id)
+
+    def on_error(raw, exc):
+        batch_id = _parse_field(raw, "batch_id")
+        if batch_id:
+            store(
+                batch_id,
+                {
+                    "status": "failed",
+                    "error": BATCH_PREDICTION_FAILED_MESSAGE,
+                    "owner_id": _parse_field(raw, "owner_id"),
+                },
+            )
+
+    _consume(redis_client, batch_prediction_queue, handle, on_error, "batch prediction", sleep=sleep, stop=stop)
+
+
 def _explanation_loop(
     redis_client, model_storage_path, app, explanation_queue="explanation_queue", sleep=time.sleep, stop=None
 ):
@@ -280,6 +315,7 @@ def run_ml_worker(
     llm_queue="llm_queue",
     usage_meter=None,
     scoring_queue="scoring_queue",
+    batch_prediction_queue="batch_prediction_queue",
 ):
     """Starts the training/prediction/explanation queue-consumer threads.
 
@@ -313,6 +349,7 @@ def run_ml_worker(
     threads = [
         threading.Thread(target=_training_loop, args=(redis_client, model_storage_path, app, training_queue, liveness), kwargs={"scoring_queue": scoring_queue}, daemon=True),
         threading.Thread(target=_prediction_loop, args=(redis_client, model_storage_path, app, prediction_queue), daemon=True),
+        threading.Thread(target=_batch_prediction_loop, args=(redis_client, model_storage_path, app, batch_prediction_queue), daemon=True),
         threading.Thread(target=_explanation_loop, args=(redis_client, model_storage_path, app, explanation_queue), daemon=True),
         threading.Thread(target=_llm_loop, args=(redis_client, app, llm_queue), daemon=True),
         threading.Thread(target=_scoring_loop, args=(redis_client, model_storage_path, app, scoring_queue), daemon=True),
@@ -323,9 +360,10 @@ def run_ml_worker(
     start_worker_liveness(redis_client, liveness)
 
     logger.info(
-        "legal_ml_core worker running (%s, %s, %s, %s, %s)",
+        "legal_ml_core worker running (%s, %s, %s, %s, %s, %s)",
         training_queue,
         prediction_queue,
+        batch_prediction_queue,
         explanation_queue,
         llm_queue,
         scoring_queue,

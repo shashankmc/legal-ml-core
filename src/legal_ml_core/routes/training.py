@@ -13,7 +13,12 @@ from ..job_state import (
     waiting_message,
     worker_is_alive,
 )
-from ..queue_contract import JOB_CANCEL_TTL_SECONDS, job_cancel_key, job_status_key
+from ..queue_contract import (
+    JOB_CANCEL_TTL_SECONDS,
+    batch_prediction_result_key,
+    job_cancel_key,
+    job_status_key,
+)
 from .models import stale_after, start_training_job, training_queue
 import json
 import uuid
@@ -311,6 +316,7 @@ def batch_predict():
         # Add batch prediction task to queue
         batch_prediction_data = {
             "model_id": model_id,
+            "model_type": model.model_type,
             "texts": texts,
             "owner_id": owner_id,
         }
@@ -341,8 +347,7 @@ def get_batch_prediction(batch_id):
         owner_id = get_jwt_identity()
 
         # Get batch prediction result from Redis
-        result_key = f"batch_prediction_result_{batch_id}"
-        result = current_app.redis_client.get(result_key)
+        result = current_app.redis_client.get(batch_prediction_result_key(batch_id))
 
         if not result:
             return jsonify({"error": "Batch prediction not found or expired"}), 404
