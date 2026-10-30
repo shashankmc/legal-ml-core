@@ -313,3 +313,28 @@ def test_start_locks_the_model_row_before_checking_for_an_active_job(
     model_lock = next(i for i, s in enumerate(statements) if "FROM models" in s and "FOR UPDATE" in s)
     job_check = next(i for i, s in enumerate(statements) if "FROM training_jobs" in s)
     assert model_lock < job_check
+
+
+def test_a_batch_reads_as_pending_from_the_moment_it_is_queued(client, auth_headers, completed_model):
+    batch_id = _queue_batch(client, auth_headers, completed_model, ["the plaintiff"])
+
+    response = client.get(f"/api/training/batch-prediction/{batch_id}", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"batch_prediction": {"status": "pending", "batch_id": batch_id}}
+
+
+def test_a_pending_batch_stays_private_to_its_owner(client, auth_headers, completed_model):
+    batch_id = _queue_batch(client, auth_headers, completed_model, ["the plaintiff"])
+    other = {"Authorization": "Bearer test-token::" + json.dumps({"sub": "22222222-2222-2222-2222-222222222222"})}
+
+    response = client.get(f"/api/training/batch-prediction/{batch_id}", headers=other)
+
+    assert response.status_code == 403
+    assert "plaintiff" not in response.get_data(as_text=True)
+
+
+def test_an_unknown_batch_is_still_not_found(client, auth_headers):
+    response = client.get("/api/training/batch-prediction/never-queued", headers=auth_headers)
+
+    assert response.status_code == 404

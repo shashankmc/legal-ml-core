@@ -15,6 +15,7 @@ from ..job_state import (
 )
 from ..queue_contract import (
     JOB_CANCEL_TTL_SECONDS,
+    batch_prediction_request_key,
     batch_prediction_result_key,
     job_cancel_key,
     job_status_key,
@@ -324,7 +325,7 @@ def batch_predict():
         batch_id = str(uuid.uuid4())
         redis_client = current_app.redis_client
         redis_client.setex(
-            f"batch_prediction_{batch_id}", 1800, json.dumps(batch_prediction_data)
+            batch_prediction_request_key(batch_id), 1800, json.dumps(batch_prediction_data)
         )  # 30 min TTL
         redis_client.lpush(
             current_app.config.get("LEGAL_ML_BATCH_PREDICTION_QUEUE", "batch_prediction_queue"),
@@ -346,17 +347,22 @@ def get_batch_prediction(batch_id):
     try:
         owner_id = get_jwt_identity()
 
-        # Get batch prediction result from Redis
-        result = current_app.redis_client.get(batch_prediction_result_key(batch_id))
+        # Get batch prediction result from Redis, else the queued request
+        redis_client = current_app.redis_client
+        result = redis_client.get(batch_prediction_result_key(batch_id))
+        record = result or redis_client.get(batch_prediction_request_key(batch_id))
 
-        if not result:
+        if not record:
             return jsonify({"error": "Batch prediction not found or expired"}), 404
 
-        result_data = json.loads(result)
+        result_data = json.loads(record)
 
         # Verify user ownership
         if result_data.get("owner_id") != owner_id:
             return jsonify({"error": "Unauthorized"}), 403
+
+        if not result:
+            return jsonify({"batch_prediction": {"status": "pending", "batch_id": batch_id}}), 200
 
         return jsonify({"batch_prediction": result_data}), 200
 

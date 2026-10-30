@@ -57,6 +57,10 @@ def prediction_result_key(prediction_id):
     return f"prediction_result_{prediction_id}"
 
 
+def batch_prediction_request_key(batch_id):
+    return f"batch_prediction_{batch_id}"
+
+
 def batch_prediction_result_key(batch_id):
     return f"batch_prediction_result_{batch_id}"
 

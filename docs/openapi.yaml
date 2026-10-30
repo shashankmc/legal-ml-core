@@ -775,7 +775,7 @@ paths:
       operationId: getBatchPrediction
       responses:
         "200":
-          description: Batch prediction record, `status` completed (with `predictions`) or failed (with `error`)
+          description: Batch prediction record, `status` pending from the moment it is queued, then completed (with `predictions`) or failed (with `error`)
           content:
             application/json:
               schema:
