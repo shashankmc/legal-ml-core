@@ -221,9 +221,7 @@ def process_training_task(
         # Save model
         model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
         trainer.save_model(model_path)
-        metrics = verify_model(
-            db.session.get(Dataset, task_info["dataset_id"]), model_path, task_info["model_type"], metrics
-        )
+        metrics = verify_model(db.session.get(Dataset, task_info["dataset_id"]), model_path, metrics)
 
         # Guarded final write (D4): only a still-active job becomes completed.
         # If Stop landed at any point up to here, the write misses and the

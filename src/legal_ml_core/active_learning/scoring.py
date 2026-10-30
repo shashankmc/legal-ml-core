@@ -6,7 +6,6 @@ from datetime import datetime
 
 import joblib
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -32,43 +31,12 @@ VERIFIED = "holdout"
 # Fewer held-back labels than this (or than the holdout holds) grade nothing.
 MIN_HOLDOUT_LABELS = 10
 
-TRANSFORMER_TYPES = ("legalbert", "roberta")
-TRANSFORMER_BATCH_SIZE = 32
 
-
-def _transformer_probabilities(model_data, cleaned):
-    import torch
-
-    clf = model_data["model"]
-    tokenizer = model_data["tokenizer"]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    clf.eval()
-    clf.to(device)
-
-    batches = []
-    for start in range(0, len(cleaned), TRANSFORMER_BATCH_SIZE):
-        inputs = tokenizer(
-            cleaned[start : start + TRANSFORMER_BATCH_SIZE],
-            return_tensors="pt",
-            truncation=True,
-            padding=True,
-            max_length=256,
-        )
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        with torch.no_grad():
-            batches.append(torch.softmax(clf(**inputs).logits, dim=-1).cpu().numpy())
-    return np.concatenate(batches)
-
-
-def class_probabilities(model_data, model_type, texts):
+def class_probabilities(model_data, texts):
     """``(probabilities, class names)`` for ``texts``, one row per text."""
     preprocessor = model_data.get("preprocessor")
     cleaned = [preprocessor.clean_text(t) if preprocessor else t for t in texts]
-    if model_type in TRANSFORMER_TYPES:
-        probabilities = _transformer_probabilities(model_data, cleaned)
-    else:
-        clf = model_data["model"]
-        probabilities = clf.predict_proba(model_data["vectorizer"].transform(cleaned))
+    probabilities = model_data["model"].predict_proba(model_data["vectorizer"].transform(cleaned))
 
     encoder = model_data.get("label_encoder")
     classes = [str(c) for c in encoder.classes_] if encoder else None
@@ -76,18 +44,14 @@ def class_probabilities(model_data, model_type, texts):
 
 
 def _embeddings(model_data, texts):
-    """The model's own vectors. Transformers save no vectorizer, so they get
-    TF-IDF over the pool: this strategy needs similar texts close, nothing more."""
+    """The model's own vectors."""
     preprocessor = model_data.get("preprocessor")
     cleaned = [preprocessor.clean_text(t) if preprocessor else t for t in texts]
-    vectorizer = model_data.get("vectorizer")
-    if vectorizer is not None:
-        return vectorizer.transform(cleaned)
-    return TfidfVectorizer(max_features=5000).fit_transform(cleaned)
+    return model_data["vectorizer"].transform(cleaned)
 
 
-def _holdout_metrics(model_data, model_type, texts, labels):
-    probabilities, classes = class_probabilities(model_data, model_type, texts)
+def _holdout_metrics(model_data, texts, labels):
+    probabilities, classes = class_probabilities(model_data, texts)
     predicted = [classes[i] for i in probabilities.argmax(axis=1)]
     names = sorted(set(labels) | set(predicted))
     return {
@@ -101,26 +65,28 @@ def _holdout_metrics(model_data, model_type, texts, labels):
     }
 
 
-def grade_on_holdout(dataset, model_data, model_type, metrics):
+def grade_on_holdout(dataset, model_data, metrics):
     """``metrics`` graded on the holdout, or marked as not independently verified
-    when it is off or holds too few labels to mean anything."""
+    when it is off or holds too few labels to mean anything. Grading needs
+    ``predict_proba`` over a vectorizer, so a transformer trained on the same
+    Dataset reads as not independently verified too."""
     texts, labels = holdout_examples(read_rows(dataset.file_path), dataset)
     holdout_size = len(dataset.al_config.holdout_indices or [])
-    if not texts or len(texts) < min(MIN_HOLDOUT_LABELS, holdout_size):
+    if model_data.get("vectorizer") is None or not texts or len(texts) < min(MIN_HOLDOUT_LABELS, holdout_size):
         return {**metrics, "verification": UNVERIFIED, "holdout_labels": len(texts)}
     return {
         **metrics,
-        **_holdout_metrics(model_data, model_type, texts, labels),
+        **_holdout_metrics(model_data, texts, labels),
         "verification": VERIFIED,
         "holdout_labels": len(texts),
     }
 
 
-def verify_model(dataset, model_path, model_type, metrics):
+def verify_model(dataset, model_path, metrics):
     """Grade a just-saved model when its dataset has a loop, else leave ``metrics``."""
     if dataset is None or dataset.al_config is None:
         return metrics
-    return grade_on_holdout(dataset, joblib.load(model_path), model_type, metrics)
+    return grade_on_holdout(dataset, joblib.load(model_path), metrics)
 
 
 def _process_verification(task_info, model_storage_path):
@@ -129,7 +95,7 @@ def _process_verification(task_info, model_storage_path):
     if model is None or dataset is None or dataset.al_config is None:
         return
     model_path = get_storage_backend().get_model_path(model_storage_path, model.id)
-    model.metrics = verify_model(dataset, model_path, task_info["model_type"], model.metrics or {})
+    model.metrics = verify_model(dataset, model_path, model.metrics or {})
     db.session.commit()
 
 
@@ -142,7 +108,7 @@ def _pool_tasks(dataset_id):
     )
 
 
-def _scores(strategy, tasks, model_data, model_type, config, round_number):
+def _scores(strategy, tasks, model_data, config, round_number):
     texts = [task.text for task in tasks]
     seed = config.random_seed + round_number
     if strategy == "random":
@@ -156,7 +122,7 @@ def _scores(strategy, tasks, model_data, model_type, config, round_number):
             batch_size=config.batch_size,
             seed=seed,
         )
-    probabilities, _ = class_probabilities(model_data, model_type, texts)
+    probabilities, _ = class_probabilities(model_data, texts)
     return score_pool(strategy, probabilities=probabilities)
 
 
@@ -181,7 +147,7 @@ def process_scoring_task(task_info, model_storage_path):
 
     config = ALConfig.query.filter_by(dataset_id=round_row.dataset_id).first()
     tasks = _pool_tasks(round_row.dataset_id)
-    scores = _scores(task_info["strategy"], tasks, model_data, task_info["model_type"], config, round_row.number)
+    scores = _scores(task_info["strategy"], tasks, model_data, config, round_row.number)
     for task, score in zip(tasks, scores):
         task.score = float(score)
 
@@ -218,7 +184,6 @@ def queue_pool_scoring(task_info, redis_client, scoring_queue):
                     "round_id": str(round_id),
                     "dataset_id": str(round_row.dataset_id),
                     "model_id": str(task_info["model_id"]),
-                    "model_type": task_info["model_type"],
                     "strategy": config.strategy,
                 }
             ),

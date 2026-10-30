@@ -29,7 +29,7 @@ DEFAULT_BATCH_SIZE = 20
 # test side, so it is the floor as well as the default.
 MIN_PER_CLASS = 5
 # How long a round may wait for the scoring worker before it is called lost. It
-# is far above the heartbeat window: a transformer scores a large pool slowly.
+# is far above the heartbeat window, as a large pool takes a while to score.
 DEFAULT_SCORING_STALE_SECONDS = 3600
 
 DEFAULT_HOLDOUT_PERCENT = 20
@@ -406,7 +406,6 @@ def request_verification(dataset):
                 "action": "verify",
                 "dataset_id": str(dataset.id),
                 "model_id": str(model.id),
-                "model_type": model.model_type,
             }
         ),
     )

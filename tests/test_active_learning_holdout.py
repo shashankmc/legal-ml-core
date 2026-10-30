@@ -240,3 +240,16 @@ def test_labelling_a_holdout_item_keeps_it_out_of_the_pool(client, auth_headers,
 
     db.session.expire_all()
     assert db.session.get(AnnotationTask, task.id).is_holdout is True
+
+
+def test_a_model_without_a_vectorizer_reads_as_unverified(client, auth_headers, app, tmp_path, fake_redis):
+    from legal_ml_core.active_learning.scoring import UNVERIFIED, grade_on_holdout
+    from legal_ml_core.models import Dataset
+
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    _label_holdout(client, auth_headers, dataset_id, 10)
+
+    metrics = grade_on_holdout(db.session.get(Dataset, dataset_id), {"model": object(), "vectorizer": None}, {"f1_score": 0.9})
+
+    assert metrics["verification"] == UNVERIFIED
+    assert metrics["f1_score"] == 0.9

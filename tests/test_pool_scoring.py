@@ -53,7 +53,6 @@ def _run(app, fake_redis, rnd, model, strategy, queue="scoring_queue"):
                 "round_id": rnd.id,
                 "dataset_id": rnd.dataset_id,
                 "model_id": model.id,
-                "model_type": model.model_type,
                 "strategy": strategy,
             }
         ),
@@ -135,14 +134,13 @@ def test_a_scoring_failure_is_recorded_and_the_loop_survives(app, fake_redis):
                 "round_id": good_round.id,
                 "dataset_id": good_dataset.id,
                 "model_id": good_model.id,
-                "model_type": "logistic_regression",
                 "strategy": "random",
             }
         ),
     )
     fake_redis.lpush("scoring_queue", "not json at all")
     # This model file does not exist, so scoring it fails.
-    _run(app, fake_redis, rnd, type("Missing", (), {"id": "gone", "model_type": "logistic_regression"}), "random")
+    _run(app, fake_redis, rnd, type("Missing", (), {"id": "gone"}), "random")
 
     failed = db.session.get(ALRound, rnd.id)
     assert failed.status == "labelling"

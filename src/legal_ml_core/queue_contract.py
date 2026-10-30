@@ -79,6 +79,7 @@ class TrainingTaskPayload(TypedDict, total=False):
     preprocessing_options: dict
     test_size: float
     random_state: int
+    al_round_id: str  # set on an active learning round's run: rescore after it
 
 
 class ScoringTaskPayload(TypedDict):
@@ -87,8 +88,16 @@ class ScoringTaskPayload(TypedDict):
     round_id: str
     dataset_id: str
     model_id: str
-    model_type: str
     strategy: str
+
+
+class VerifyTaskPayload(TypedDict):
+    """Sent by POST /datasets/<id>/verify, on the same queue. The worker grades
+    the saved model on the holdout."""
+
+    action: str  # always "verify"
+    dataset_id: str
+    model_id: str
 
 
 class JobStatusUpdate(TypedDict, total=False):
