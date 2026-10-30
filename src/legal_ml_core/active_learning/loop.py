@@ -473,16 +473,12 @@ def request_verification(dataset):
         item = "item" if missing == 1 else "items"
         raise LoopError(f"Label {missing} more held-back {item} before checking the score.", 409)
 
-    current_app.redis_client.lpush(
-        _scoring_queue(),
-        json.dumps(
-            {
-                "action": "verify",
-                "dataset_id": str(dataset.id),
-                "model_id": str(model.id),
-            }
-        ),
-    )
+    message = {"action": "verify", "dataset_id": str(dataset.id), "model_id": str(model.id)}
+    try:
+        current_app.redis_client.lpush(_scoring_queue(), json.dumps(message))
+    except Exception:
+        logger.exception("dataset %s: the score check could not be queued", dataset.id)
+        raise LoopError("The score could not be checked. Try again.", 503)
 
 
 def reset_loops(tasks):

@@ -89,6 +89,17 @@ def verify_model(dataset, model_path, metrics):
     return grade_on_holdout(dataset, joblib.load(model_path), metrics)
 
 
+def verify_finished_model(dataset, model_path, metrics):
+    """``verify_model`` for a training run that has already succeeded: a failure
+    to grade it costs the grade, not the Model."""
+    try:
+        return verify_model(dataset, model_path, metrics)
+    except Exception:
+        db.session.rollback()
+        logger.exception("could not grade model at %s on its holdout", model_path)
+        return {**metrics, "verification": UNVERIFIED, "holdout_labels": 0}
+
+
 def _process_verification(task_info, model_storage_path):
     model = db.session.get(Model, task_info["model_id"])
     dataset = db.session.get(Dataset, task_info["dataset_id"])
@@ -157,7 +168,7 @@ def process_scoring_task(task_info, model_storage_path):
         ALRound(
             dataset_id=round_row.dataset_id,
             number=round_row.number + 1,
-            strategy=config.strategy,
+            strategy=task_info["strategy"],
             model_id=round_row.model_id,
         )
     )

@@ -1,5 +1,5 @@
 """The holdout: drawn once, never queued or trained on, the source of every metric."""
-from legal_ml_core import ALConfig, ALRound, AnnotationTask, LLMSuggestion, Model, db
+from legal_ml_core import ALConfig, ALRound, AnnotationTask, LLMSuggestion, Model, TrainingJob, db
 from tests.active_learning_helpers import (
     PROJECT_ID,
     balanced_texts,
@@ -319,3 +319,35 @@ def test_only_human_labels_grade_a_model(client, auth_headers, app, tmp_path, fa
 
     assert loop_model(dataset_id).metrics["verification"] == "not_independently_verified"
     assert loop_model(dataset_id).metrics["holdout_labels"] == 9
+
+
+def test_a_check_that_cannot_be_queued_says_so(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    _train_round(client, auth_headers, app, fake_redis, dataset_id)
+    _label_holdout(client, auth_headers, dataset_id, 10)
+
+    def boom(*args):
+        raise ConnectionError("redis down")
+
+    fake_redis.lpush = boom
+    resp = client.post(f"/api/active-learning/datasets/{dataset_id}/verify", headers=auth_headers)
+
+    assert resp.status_code == 503
+    assert resp.get_json()["error"] == "The score could not be checked. Try again."
+
+
+def test_a_grading_failure_keeps_the_finished_training(client, auth_headers, app, tmp_path, fake_redis, monkeypatch):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    _label_holdout(client, auth_headers, dataset_id, 10)
+
+    def unreadable(path):
+        raise OSError("file gone")
+
+    monkeypatch.setattr("legal_ml_core.active_learning.scoring.read_rows", unreadable)
+    _train_round(client, auth_headers, app, fake_redis, dataset_id)
+
+    assert TrainingJob.query.one().status == "completed"
+    assert loop_model(dataset_id).status == "completed"
+    assert loop_model(dataset_id).metrics["verification"] == "not_independently_verified"
+    assert loop_model(dataset_id).metrics["accuracy"] is not None
+    assert state(client, auth_headers, dataset_id)["round"]["number"] == 1

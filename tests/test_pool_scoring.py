@@ -156,3 +156,13 @@ def test_a_round_no_longer_scoring_is_left_alone(app, fake_redis):
     _run(app, fake_redis, rnd, model, "prediction_entropy")
 
     assert all(score is None for score in _scores(dataset).values())
+
+
+def test_a_round_records_the_strategy_that_ordered_it(app, fake_redis):
+    """The user can change strategy while a rescore runs: the next round was still
+    ordered by the one in the message."""
+    dataset, model, rnd = _scoring_setup(app, strategy="breaking_ties")
+
+    _run(app, fake_redis, rnd, model, "prediction_entropy")
+
+    assert ALRound.query.filter_by(dataset_id=dataset.id, number=1).one().strategy == "prediction_entropy"
