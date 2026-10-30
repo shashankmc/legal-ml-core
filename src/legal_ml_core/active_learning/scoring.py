@@ -17,7 +17,7 @@ from sklearn.metrics import (
 
 from ..annotation_queue import holdout_examples, read_rows
 from ..db import db
-from ..models import ALConfig, ALRound, AnnotationTask, Dataset, Model
+from ..models import ALConfig, ALRound, AnnotationTask, Dataset, Model, TrainingJob
 from ..storage import get_storage_backend
 from .strategies import score_pool
 
@@ -167,15 +167,19 @@ def process_scoring_task(task_info, model_storage_path):
 
 def queue_pool_scoring(task_info, redis_client, scoring_queue):
     """A round's training finished: hand the pool to the scoring queue. A failure
-    here must not touch the finished training job, so the round takes it."""
+    here must not touch the finished training job, so the round takes it. The
+    worker and the read-time sweep can both get here, so only the one that moves
+    the round on sends the message."""
     round_id = task_info["al_round_id"]
-    round_row = db.session.get(ALRound, round_id)
-    if round_row is None or round_row.status != "training":
-        return
-    config = ALConfig.query.filter_by(dataset_id=round_row.dataset_id).first()
-    round_row.status = "scoring"
-    round_row.metrics = db.session.get(Model, task_info["model_id"]).metrics
+    job = db.session.get(TrainingJob, task_info["job_id"])
+    claimed = ALRound.query.filter_by(id=round_id, status="training").update(
+        {"status": "scoring", "metrics": job.metrics}
+    )
     db.session.commit()
+    if not claimed:
+        return
+    round_row = db.session.get(ALRound, round_id)
+    config = ALConfig.query.filter_by(dataset_id=round_row.dataset_id).first()
     try:
         redis_client.lpush(
             scoring_queue,

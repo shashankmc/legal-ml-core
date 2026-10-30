@@ -17,9 +17,9 @@ from ..annotation_queue import (
     rows_with_text,
 )
 from ..db import db
-from ..job_state import ACTIVE_JOB_STATUSES, sweep_lost_job, sweep_stale_job
+from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, sweep_lost_job, sweep_stale_job
 from ..models import ALConfig, ALRound, AnnotationTask, Model, TrainingJob
-from .scoring import MIN_HOLDOUT_LABELS, fail_scoring_round
+from .scoring import MIN_HOLDOUT_LABELS, fail_scoring_round, queue_pool_scoring
 from .strategies import DEFAULT_STRATEGY, STRATEGIES, score_pool
 
 logger = logging.getLogger(__name__)
@@ -232,22 +232,48 @@ def _labels_at_last_train(dataset_id):
     )
 
 
+def _scoring_queue():
+    return current_app.config.get("LEGAL_ML_SCORING_QUEUE", "scoring_queue")
+
+
+def _back_to_labelling(round_row, reason):
+    round_row.status = "labelling"
+    round_row.labels_used = None
+    round_row.error = reason
+    db.session.commit()
+
+
+def _settle_training_round(round_row):
+    redis_client = current_app.redis_client
+    stale = current_app.config.get("LEGAL_ML_HEARTBEAT_STALE_SECONDS", 120)
+    if round_row.job_id is None:
+        # The claim commits before the job exists, so a crash between the two
+        # leaves a round that nothing will ever finish.
+        if datetime.utcnow() - round_row.updated_at > timedelta(seconds=stale):
+            _back_to_labelling(round_row, COULD_NOT_START_MESSAGE)
+        return
+
+    job = db.session.get(TrainingJob, round_row.job_id)
+    if job is not None and job.status in ACTIVE_JOB_STATUSES:
+        sweep_stale_job(job, redis_client, stale)
+        queue = current_app.config.get("LEGAL_ML_TRAINING_QUEUE", "training_queue")
+        sweep_lost_job(job, redis_client, queue, stale)
+    if job is None or job.status in ("failed", "cancelled"):
+        _back_to_labelling(round_row, (job.error_message if job else None) or "Training was stopped.")
+    elif job.status == "completed":
+        # The worker hands over itself, unless it died just after finishing.
+        queue_pool_scoring(
+            {"al_round_id": round_row.id, "job_id": job.id, "model_id": job.model_id},
+            redis_client,
+            _scoring_queue(),
+        )
+
+
 def _settle_round(round_row):
-    """Read-time sweep, like training's: a round whose job ended without
-    finishing goes back to labelling with the reason."""
-    if round_row.status == "training" and round_row.job_id:
-        job = db.session.get(TrainingJob, round_row.job_id)
-        if job is not None and job.status in ACTIVE_JOB_STATUSES:
-            redis_client = current_app.redis_client
-            stale = current_app.config.get("LEGAL_ML_HEARTBEAT_STALE_SECONDS", 120)
-            sweep_stale_job(job, redis_client, stale)
-            queue = current_app.config.get("LEGAL_ML_TRAINING_QUEUE", "training_queue")
-            sweep_lost_job(job, redis_client, queue, stale)
-        if job is None or job.status in ("failed", "cancelled"):
-            round_row.status = "labelling"
-            round_row.labels_used = None
-            round_row.error = (job.error_message if job else None) or "Training was stopped."
-            db.session.commit()
+    """Read-time sweep, like training's: a round whose job ended without finishing
+    goes back to labelling with the reason, and one whose job finished goes on."""
+    if round_row.status == "training":
+        _settle_training_round(round_row)
     elif round_row.status == "scoring":
         limit = current_app.config.get("LEGAL_ML_AL_SCORING_STALE_SECONDS", DEFAULT_SCORING_STALE_SECONDS)
         if datetime.utcnow() - round_row.updated_at > timedelta(seconds=limit):
@@ -374,14 +400,9 @@ def request_retrain(dataset, owner_id):
 
     body, status = start_training_job(owner_id, model.id, {}, al_round_id=round_row.id)
     if status != 200:
-        round_row.status = "labelling"
-        round_row.labels_used = None
-        round_row.error = body.get("error")
-        db.session.commit()
+        _back_to_labelling(round_row, body.get("error"))
         return body, status
 
-    round_row.job_id = body["job_id"]
-    db.session.commit()
     return {"message": "Training started", "job_id": body["job_id"], "model_id": str(model.id)}, 202
 
 
@@ -400,7 +421,7 @@ def request_verification(dataset):
         raise LoopError(f"Label {missing} more held-back {item} before checking the score.", 409)
 
     current_app.redis_client.lpush(
-        current_app.config.get("LEGAL_ML_SCORING_QUEUE", "scoring_queue"),
+        _scoring_queue(),
         json.dumps(
             {
                 "action": "verify",

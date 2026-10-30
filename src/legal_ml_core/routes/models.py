@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from ..db import db
-from ..models import Model, Dataset, TrainingJob
+from ..models import ALRound, Model, Dataset, TrainingJob
 from ..db_utils import project_belongs_to_owner
 from ..job_state import (
     ACTIVE_JOB_STATUSES,
@@ -1091,12 +1091,17 @@ def _lock_model_and_find_active_job(model_id, owner_id):
             return model, active
 
 
+MODEL_BUSY_MESSAGE = "This Model is already training. Retrain when it finishes."
+
+
 def start_training_job(owner_id, model_id, data, al_round_id=None):
     """The one way a training run starts; both start routes call it. Returns
     (response body, status). Starting a model with an active job returns that
     job, and a run that cannot be queued leaves a failed job, never a pending
     one nothing will pick up. ``al_round_id`` ties the run to an active learning
-    round, so the worker rescores the pool after it; it never comes from a body."""
+    round, so the worker rescores the pool after it; it never comes from a body.
+    A round cannot join a job already running: that job has no round to rescore
+    and did not see the round's labels, so the round is refused instead."""
     model, active = _lock_model_and_find_active_job(model_id, owner_id)
     if not model:
         return {"error": "Model not found"}, 404
@@ -1105,6 +1110,8 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
     if active:
         job_id = str(active.id)
         db.session.rollback()  # release the model row lock
+        if al_round_id:
+            return {"error": MODEL_BUSY_MESSAGE, "job_id": job_id}, 409
         return (
             {"message": "Training already started", "job_id": job_id, "model_id": str(model_id)},
             200,
@@ -1122,6 +1129,10 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
     # Create training job
     training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
     db.session.add(training_job)
+    if al_round_id:
+        # With the job, so no crash can leave a running job its round doesn't know.
+        db.session.flush()
+        ALRound.query.filter_by(id=al_round_id).update({"job_id": training_job.id})
 
     # A retrain that cannot start must not cost the model its finished state.
     status_before = "failed" if model.status == "training" else model.status

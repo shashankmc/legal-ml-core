@@ -1,8 +1,12 @@
 """The loop: label a batch, retrain on request, and the queue reorders."""
+import json
+from datetime import datetime, timedelta
+
 import pytest
 
 from legal_ml_core import ALRound, TrainingJob, db
 from legal_ml_core.active_learning.loop import validate_host_config
+from legal_ml_core.compute.tasks import process_training_task
 from tests.active_learning_helpers import (
     PROJECT_ID,
     alternating,
@@ -349,3 +353,103 @@ def test_labels_already_in_the_file_count_towards_the_minimum(client, auth_heade
     assert body["label_counts"] == {"civil": 5, "criminal": 5}
     assert body["retrain"]["allowed"] is True
     assert body["retrain"]["new_labels"] == 10
+
+
+def _train_without_rescoring(app, fake_redis):
+    """The worker finishes the job but dies before it hands over to scoring."""
+    task = json.loads(fake_redis.rpop("training_queue"))
+    task.pop("al_round_id")
+    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"])
+    db.session.expire_all()
+
+
+def test_a_finished_job_with_no_scoring_moves_the_round_on(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
+    retrain(client, auth_headers, dataset_id)
+    _train_without_rescoring(app, fake_redis)
+
+    assert state(client, auth_headers, dataset_id)["round"]["status"] == "scoring"
+
+    state(client, auth_headers, dataset_id)
+    assert fake_redis.llen("scoring_queue") == 1
+    run_scoring(app, fake_redis)
+    body = state(client, auth_headers, dataset_id)
+    assert body["round"]["number"] == 1
+    assert ALRound.query.filter_by(dataset_id=dataset_id, number=0).one().metrics is not None
+
+
+def test_a_finished_job_keeps_the_round_when_scoring_cannot_queue(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
+    retrain(client, auth_headers, dataset_id)
+    _train_without_rescoring(app, fake_redis)
+
+    def boom(*args):
+        raise ConnectionError("redis down")
+
+    fake_redis.lpush = boom
+    body = state(client, auth_headers, dataset_id)
+
+    assert body["round"]["status"] == "labelling"
+    assert body["round"]["error"] == "The queue could not be reordered. Try retraining."
+    assert body["retrain"]["allowed"] is True
+
+
+def _round_with_no_job(dataset_id, age_seconds):
+    round_row = ALRound.query.filter_by(dataset_id=dataset_id).one()
+    ALRound.query.filter_by(id=round_row.id).update(
+        {"status": "training", "updated_at": datetime.utcnow() - timedelta(seconds=age_seconds)},
+        synchronize_session=False,
+    )
+    db.session.commit()
+    db.session.expire_all()
+
+
+def test_a_round_that_never_got_a_job_returns_to_labelling(client, auth_headers, app, tmp_path):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
+    _round_with_no_job(dataset_id, age_seconds=600)
+
+    body = state(client, auth_headers, dataset_id)
+
+    assert body["round"]["status"] == "labelling"
+    assert body["round"]["error"] == "Training could not start. Try again."
+    assert body["retrain"]["allowed"] is True
+
+
+def test_a_round_just_claimed_is_given_time_to_get_its_job(client, auth_headers, app, tmp_path):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
+    _round_with_no_job(dataset_id, age_seconds=1)
+
+    assert state(client, auth_headers, dataset_id)["round"]["status"] == "training"
+
+
+def test_a_round_records_its_job_with_the_job(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
+
+    job_id = retrain(client, auth_headers, dataset_id).get_json()["job_id"]
+
+    assert ALRound.query.filter_by(dataset_id=dataset_id).one().job_id == job_id
+
+
+def test_retrain_is_refused_while_the_model_already_trains(client, auth_headers, app, tmp_path, fake_redis):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    label_next(client, auth_headers, dataset_id, alternating(), 16)
+    retrain(client, auth_headers, dataset_id)
+    run_training(app, fake_redis)
+    run_scoring(app, fake_redis)
+    label_next(client, auth_headers, dataset_id, alternating(), 2)
+    outside = client.post(f"/api/models/{loop_model(dataset_id).id}/train", json={}, headers=auth_headers)
+    assert outside.status_code == 200
+
+    resp = retrain(client, auth_headers, dataset_id)
+
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == "This Model is already training. Retrain when it finishes."
+    assert fake_redis.llen("training_queue") == 1
+    body = state(client, auth_headers, dataset_id)
+    assert body["round"]["status"] == "labelling"
+    assert body["retrain"]["new_labels"] == 2
