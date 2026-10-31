@@ -1,0 +1,209 @@
+"""Every value the catalogue offers either trains or is refused with a reason
+when the Model is created, and nothing that cannot train reaches the worker."""
+import json
+from itertools import product
+
+import pandas as pd
+import pytest
+from transformers import BertConfig, BertForSequenceClassification, BertTokenizerFast
+
+from legal_ml_core import Dataset, Model, TrainingJob, db
+from legal_ml_core.compute.tasks import process_training_task
+from legal_ml_core.routes.models import AVAILABLE_MODELS, parameter_refusal
+from tests.conftest import TEST_USER_ID
+
+DOCUMENTS = [
+    "the court ruled for the plaintiff on the contract claim",
+    "the defendant was found liable for negligent damages",
+    "the appellant lodged a notice against the sentence",
+    "the parties settled the employment dispute by agreement",
+    "the tribunal dismissed the asylum application entirely",
+    "the jury returned a guilty verdict after the trial",
+]
+TWO_LABELS = ["civil", "criminal"] * 15
+
+
+def _dataset(app, tmp_path, task_type, labels, documents=None):
+    documents = documents or DOCUMENTS * 5
+    path = tmp_path / f"{task_type}-{len(set(labels))}-{len(documents)}.csv"
+    pd.DataFrame({"text": documents, "label": labels}).to_csv(path, index=False)
+    with app.app_context():
+        dataset = Dataset(
+            owner_id=TEST_USER_ID,
+            name="D1",
+            file_path=str(path),
+            row_count=len(documents),
+            columns=[],
+            task_type=task_type,
+        )
+        db.session.add(dataset)
+        db.session.commit()
+        return dataset.id
+
+
+@pytest.fixture
+def datasets(app, tmp_path):
+    return {
+        "classification": _dataset(app, tmp_path, "classification", TWO_LABELS),
+        "transformer": _dataset(app, tmp_path, "classification", TWO_LABELS),
+        "clustering": _dataset(app, tmp_path, "clustering", ["x"] * 30),
+        "topic_modeling": _dataset(app, tmp_path, "topic_modeling", ["x"] * 30),
+    }
+
+
+def _create(client, auth_headers, dataset_id, model_type, parameters):
+    return client.post(
+        "/api/models/",
+        json={"name": "M", "dataset_id": dataset_id, "model_type": model_type, "parameters": parameters},
+        headers=auth_headers,
+    )
+
+
+def _train_or_refuse(client, auth_headers, app, fake_redis, dataset_id, model_type, parameters, swap_download=None):
+    """Create a Model and run it as the wizard and worker do. Returns the refusal
+    at creation, or None once training has completed."""
+    created = _create(client, auth_headers, dataset_id, model_type, parameters)
+    if created.status_code == 400:
+        return created.get_json()["error"]
+    assert created.status_code == 201, created.get_json()
+    model_id = created.get_json()["model"]["id"]
+    started = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
+    assert started.status_code == 200, started.get_json()
+
+    task = json.loads(fake_redis.rpop("training_queue"))
+    if swap_download:
+        task["parameters"]["model_name"] = swap_download
+    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"])
+
+    job = db.session.get(TrainingJob, task["job_id"])
+    assert job.status == "completed", f"{model_type} {parameters}: {job.error_message}"
+    return None
+
+
+def _models():
+    for category, models in AVAILABLE_MODELS.items():
+        for model_type, info in models.items():
+            yield category, model_type, info
+
+
+def _select_combinations():
+    """Every combination of every model's select options."""
+    for category, model_type, info in _models():
+        selects = {k: v["options"] for k, v in info["parameters"].items() if v["type"] == "select"}
+        for values in product(*selects.values()):
+            yield category, model_type, dict(zip(selects, values))
+
+
+def _single_values():
+    """Each boolean both ways, and each number at both ends of its range."""
+    for category, model_type, info in _models():
+        for name, field in info["parameters"].items():
+            if field["type"] == "boolean":
+                values = [True, False]
+            elif field["type"] in ("int", "float"):
+                values = [field["min"], field["max"]]
+                if field["default"] is None:
+                    values.append(None)
+            else:
+                continue
+            for value in values:
+                yield category, model_type, {name: value}
+
+
+SWEEP = sorted({
+    json.dumps(case) for case in [*_select_combinations(), *_single_values()]
+})
+
+
+@pytest.fixture
+def tiny_bert(tmp_path):
+    """Stands in for a download: the sweep trains with the chosen settings, and
+    only the weights are replaced."""
+    words = sorted({word for document in DOCUMENTS for word in document.split()})
+    path = tmp_path / "bert"
+    path.mkdir()
+    vocab = path / "vocab.txt"
+    vocab.write_text("\n".join(["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", *words]))
+    BertTokenizerFast(vocab_file=str(vocab)).save_pretrained(path)
+    config = BertConfig(
+        vocab_size=5 + len(words), hidden_size=8, num_hidden_layers=1, num_attention_heads=2, intermediate_size=8
+    )
+    BertForSequenceClassification(config).save_pretrained(path)
+    return str(path)
+
+
+@pytest.mark.parametrize("case", SWEEP)
+def test_every_offered_value_trains_or_is_refused_at_creation(
+    client, auth_headers, app, fake_redis, datasets, tiny_bert, case
+):
+    category, model_type, chosen = json.loads(case)
+    download = tiny_bert if category == "transformer" else None
+
+    refusal = _train_or_refuse(
+        client, auth_headers, app, fake_redis, datasets[category], model_type, chosen, swap_download=download
+    )
+
+    if refusal:
+        rules = AVAILABLE_MODELS[category][model_type]["rules"]
+        assert refusal in [rule["reason"] for rule in rules]
+
+
+@pytest.mark.parametrize(
+    "category, model_type, name, value",
+    [
+        (category, model_type, name, value)
+        for category, model_type, info in _models()
+        for name, field in info["parameters"].items()
+        if field["type"] == "select"
+        for value in field["options"]
+    ],
+)
+def test_no_option_is_offered_that_every_combination_refuses(category, model_type, name, value):
+    info = AVAILABLE_MODELS[category][model_type]
+    options = {k: v["options"] for k, v in info["parameters"].items() if v["type"] == "select"}
+    options[name] = [value]
+
+    combinations = [dict(zip(options, values)) for values in product(*options.values())]
+
+    assert any(parameter_refusal(model_type, chosen) is None for chosen in combinations)
+
+
+@pytest.mark.parametrize("category, model_type, info", list(_models()))
+def test_the_defaults_are_accepted(category, model_type, info):
+    defaults = {name: field["default"] for name, field in info["parameters"].items()}
+
+    assert parameter_refusal(model_type, defaults) is None
+
+
+@pytest.mark.parametrize("ratio", [0.0, 1.0])
+def test_the_ends_of_the_elasticnet_mix_train(client, auth_headers, app, fake_redis, datasets, ratio):
+    chosen = {"penalty": "elasticnet", "solver": "saga", "l1_ratio": ratio}
+
+    assert _train_or_refuse(
+        client, auth_headers, app, fake_redis, datasets["classification"], "logistic_regression", chosen
+    ) is None
+
+
+def test_the_catalogue_says_which_options_depend_on_another(client, auth_headers):
+    models = client.get("/api/models/available", headers=auth_headers).get_json()["models"]
+
+    rules = models["classification"]["logistic_regression"]["rules"]
+    assert {
+        "when": {"penalty": "elasticnet"},
+        "parameter": "solver",
+        "options": ["saga"],
+        "reason": "The elasticnet penalty needs the saga solver.",
+    } in rules
+
+
+def test_a_document_with_no_usable_words_does_not_stop_cosine_clustering(
+    client, auth_headers, app, fake_redis, tmp_path
+):
+    documents = DOCUMENTS * 4 + ["the and of", "of the"] + DOCUMENTS[:4]
+    dataset_id = _dataset(app, tmp_path, "clustering", ["x"] * len(documents), documents)
+
+    refusal = _train_or_refuse(
+        client, auth_headers, app, fake_redis, dataset_id, "hierarchical", {"linkage": "average", "affinity": "cosine"}
+    )
+
+    assert refusal is None

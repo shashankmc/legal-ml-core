@@ -28,7 +28,9 @@ CLASS_WEIGHT_PARAMETER = {
     "description": "Give rare labels more weight in training",
 }
 
-# Available model types and their parameters
+# Available model types and their parameters: what the wizard offers and what
+# parameter_refusal accepts, read from the same table. A rule limits `parameter`
+# to `options` when the values in its `when` are chosen, and `reason` says why.
 AVAILABLE_MODELS = {
     "classification": {
         "svm": {
@@ -43,10 +45,10 @@ AVAILABLE_MODELS = {
                 },
                 "C": {
                     "type": "float",
-                    "min": 0.1,
+                    "min": 0.001,
                     "max": 100.0,
                     "default": 1.0,
-                    "description": "Regularization parameter",
+                    "description": "Regularisation parameter",
                 },
                 "gamma": {
                     "type": "select",
@@ -56,7 +58,7 @@ AVAILABLE_MODELS = {
                 },
                 "degree": {
                     "type": "int",
-                    "min": 2,
+                    "min": 1,
                     "max": 10,
                     "default": 3,
                     "description": "Degree for polynomial kernel",
@@ -104,7 +106,7 @@ AVAILABLE_MODELS = {
             "parameters": {
                 "n_estimators": {
                     "type": "int",
-                    "min": 10,
+                    "min": 1,
                     "max": 1000,
                     "default": 100,
                     "description": "Number of trees",
@@ -139,7 +141,7 @@ AVAILABLE_MODELS = {
             "parameters": {
                 "alpha": {
                     "type": "float",
-                    "min": 0.1,
+                    "min": 0.01,
                     "max": 10.0,
                     "default": 1.0,
                     "description": "Smoothing parameter",
@@ -157,20 +159,20 @@ AVAILABLE_MODELS = {
             "parameters": {
                 "C": {
                     "type": "float",
-                    "min": 0.1,
+                    "min": 0.001,
                     "max": 100.0,
                     "default": 1.0,
-                    "description": "Inverse regularization strength",
+                    "description": "Inverse regularisation strength",
                 },
                 "penalty": {
                     "type": "select",
-                    "options": ["l1", "l2", "elasticnet"],
+                    "options": ["l2", "l1", "elasticnet", "none"],
                     "default": "l2",
                     "description": "Regularization penalty",
                 },
                 "solver": {
                     "type": "select",
-                    "options": ["liblinear", "lbfgs", "saga"],
+                    "options": ["lbfgs", "newton-cg", "liblinear", "sag", "saga"],
                     "default": "lbfgs",
                     "description": "Optimisation algorithm",
                 },
@@ -183,6 +185,26 @@ AVAILABLE_MODELS = {
                 },
                 "class_weight": CLASS_WEIGHT_PARAMETER,
             },
+            "rules": [
+                {
+                    "when": {"penalty": "l1"},
+                    "parameter": "solver",
+                    "options": ["liblinear", "saga"],
+                    "reason": "The l1 penalty needs the liblinear or saga solver.",
+                },
+                {
+                    "when": {"penalty": "elasticnet"},
+                    "parameter": "solver",
+                    "options": ["saga"],
+                    "reason": "The elasticnet penalty needs the saga solver.",
+                },
+                {
+                    "when": {"penalty": "none"},
+                    "parameter": "solver",
+                    "options": ["lbfgs", "newton-cg", "sag", "saga"],
+                    "reason": "Training with no penalty cannot use the liblinear solver.",
+                },
+            ],
         },
     },
     "clustering": {
@@ -201,11 +223,11 @@ AVAILABLE_MODELS = {
                     "type": "select",
                     "options": ["k-means++", "random"],
                     "default": "k-means++",
-                    "description": "Initialization method",
+                    "description": "Initialisation method",
                 },
                 "max_iter": {
                     "type": "int",
-                    "min": 100,
+                    "min": 10,
                     "max": 1000,
                     "default": 300,
                     "description": "Maximum iterations",
@@ -238,11 +260,19 @@ AVAILABLE_MODELS = {
                 },
                 "affinity": {
                     "type": "select",
-                    "options": ["euclidean", "l1", "l2", "manhattan"],
+                    "options": ["euclidean", "l1", "l2", "manhattan", "cosine"],
                     "default": "euclidean",
                     "description": "Distance metric",
                 },
             },
+            "rules": [
+                {
+                    "when": {"linkage": "ward"},
+                    "parameter": "affinity",
+                    "options": ["euclidean", "l2"],
+                    "reason": "Ward linkage needs euclidean or l2 distance.",
+                },
+            ],
         },
         "dbscan": {
             "name": "DBSCAN",
@@ -250,7 +280,7 @@ AVAILABLE_MODELS = {
             "parameters": {
                 "eps": {
                     "type": "float",
-                    "min": 0.1,
+                    "min": 0.01,
                     "max": 10.0,
                     "default": 0.5,
                     "description": "Maximum distance between samples",
@@ -260,7 +290,7 @@ AVAILABLE_MODELS = {
                     "min": 1,
                     "max": 100,
                     "default": 5,
-                    "description": "Minimum samples in neighborhood",
+                    "description": "Minimum samples in neighbourhood",
                 },
                 "metric": {
                     "type": "select",
@@ -274,7 +304,7 @@ AVAILABLE_MODELS = {
     "topic_modeling": {
         "lda": {
             "name": "Latent Dirichlet Allocation",
-            "description": "Probabilistic topic modeling using LDA",
+            "description": "Probabilistic topic modelling using LDA",
             "parameters": {
                 "n_components": {
                     "type": "int",
@@ -307,8 +337,8 @@ AVAILABLE_MODELS = {
             },
         },
         "nmf": {
-            "name": "Non-negative Matrix Factorization",
-            "description": "Topic modeling using NMF decomposition",
+            "name": "Non-negative Matrix Factorisation",
+            "description": "Topic modelling using NMF decomposition",
             "parameters": {
                 "n_components": {
                     "type": "int",
@@ -329,14 +359,14 @@ AVAILABLE_MODELS = {
                     "min": 0.0,
                     "max": 1.0,
                     "default": 0.0,
-                    "description": "L1 regularization",
+                    "description": "Regularisation strength",
                 },
-                "l1_ratio": {
-                    "type": "float",
-                    "min": 0.0,
-                    "max": 1.0,
-                    "default": 0.0,
-                    "description": "L1/L2 regularization ratio",
+                "random_state": {
+                    "type": "int",
+                    "min": 0,
+                    "max": 1000,
+                    "default": 42,
+                    "description": "Random seed",
                 },
             },
         },
@@ -368,7 +398,7 @@ AVAILABLE_MODELS = {
                 },
                 "batch_size": {
                     "type": "int",
-                    "min": 8,
+                    "min": 4,
                     "max": 32,
                     "default": 16,
                     "description": "Training batch size",
@@ -384,7 +414,7 @@ AVAILABLE_MODELS = {
         },
         "roberta": {
             "name": "RoBERTa",
-            "description": "Robustly optimized BERT approach",
+            "description": "Robustly optimised BERT approach",
             "parameters": {
                 "model_name": {
                     "type": "select",
@@ -408,7 +438,7 @@ AVAILABLE_MODELS = {
                 },
                 "batch_size": {
                     "type": "int",
-                    "min": 8,
+                    "min": 4,
                     "max": 32,
                     "default": 16,
                     "description": "Training batch size",
@@ -475,50 +505,50 @@ def validate_model_task_compatibility(model_type, task_type):
     return True, None
 
 
-def _combination_refusal(model_type, parameters):
-    """Why these values cannot train together, or None. Each pair here is one
-    scikit-learn refuses when it fits, which is too late to tell the user."""
-    if model_type == "logistic_regression":
-        penalty = parameters.get("penalty", "l2")
-        solver = parameters.get("solver", "lbfgs")
-        if penalty == "l1" and solver not in ("liblinear", "saga"):
-            return "The l1 penalty needs the liblinear or saga solver."
-        if penalty == "elasticnet" and solver != "saga":
-            return "The elasticnet penalty needs the saga solver."
-    if model_type == "hierarchical":
-        distance = parameters.get("affinity", "euclidean")
-        if parameters.get("linkage", "ward") == "ward" and distance not in ("euclidean", "l2"):
-            return "Ward linkage needs euclidean or l2 distance."
+def _number_refusal(label, value, field):
+    """Why this value does not fit its catalogue entry, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"{label} must be a number."
+    if field["type"] == "int" and not isinstance(value, int):
+        return f"{label} must be a whole number."
+    return None
+
+
+def _field_refusal(name, value, field):
+    label = field.get("description", name)
+    # "No limit" (e.g. max_depth) is a choice, and the wizard's default.
+    if value is None and field["default"] is None:
+        return None
+    if field["type"] in ("int", "float"):
+        return _number_refusal(label, value, field)
+    if field["type"] == "boolean" and not isinstance(value, bool):
+        return f"{label} must be true or false."
+    if field["type"] == "select" and value not in field["options"]:
+        return f'{label} must be one of: {", ".join(field["options"])}.'
     return None
 
 
 def parameter_refusal(model_type, parameters):
-    """Why these parameters cannot train this model type, or None."""
+    """Why these parameters cannot train this model type, or None. Everything
+    comes from the model's catalogue entry."""
     if not isinstance(parameters, dict):
         return "parameters must be an object"
 
-    expected_params = AVAILABLE_MODELS[model_category_for(model_type)][model_type]["parameters"]
+    info = AVAILABLE_MODELS[model_category_for(model_type)][model_type]
+    fields = info["parameters"]
+    for name, value in parameters.items():
+        if name in fields:
+            refusal = _field_refusal(name, value, fields[name])
+            if refusal:
+                return refusal
 
-    # Validate parameter types
-    for param_name, param_value in parameters.items():
-        if param_name not in expected_params:
-            continue
-        param_config = expected_params[param_name]
-        param_type = param_config["type"]
+    chosen = {name: field["default"] for name, field in fields.items()} | parameters
 
-        # "No limit" (e.g. max_depth) is a choice, and the wizard's default.
-        if param_value is None and param_config["default"] is None:
-            continue
-        if param_type == "int" and not isinstance(param_value, int):
-            return f"Parameter {param_name} must be an integer"
-        if param_type == "float" and not isinstance(param_value, (int, float)):
-            return f"Parameter {param_name} must be a number"
-        if param_type == "boolean" and not isinstance(param_value, bool):
-            return f"Parameter {param_name} must be a boolean"
-        if param_type == "select" and param_value not in param_config["options"]:
-            return f'Parameter {param_name} must be one of: {", ".join(param_config["options"])}'
-
-    return _combination_refusal(model_type, parameters)
+    for rule in info.get("rules", []):
+        holds = all(chosen.get(name) == value for name, value in rule["when"].items())
+        if holds and chosen.get(rule["parameter"]) not in rule["options"]:
+            return rule["reason"]
+    return None
 
 
 @models_bp.route("/available", methods=["GET"])

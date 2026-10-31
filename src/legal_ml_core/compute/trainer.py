@@ -8,6 +8,7 @@ from sklearn.decomposition import NMF, LatentDirichletAllocation
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics.pairwise import cosine_distances
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -200,12 +201,14 @@ class MLModelTrainer:
             )
         elif model_type == "logistic_regression":
             penalty = parameters.get("penalty", "l2")
+            solver = parameters.get("solver", "lbfgs")
             # Without a ratio, scikit-learn 1.8 and later fit elasticnet as plain l2.
             mix = {"l1_ratio": parameters.get("l1_ratio", 0.5)} if penalty == "elasticnet" else {}
             self.model = LogisticRegression(
                 C=parameters.get("C", 1.0),
-                penalty=penalty,
-                solver=parameters.get("solver", "lbfgs"),
+                # "none" is the catalogue's name for scikit-learn's None.
+                penalty=None if penalty == "none" else penalty,
+                solver=solver,
                 class_weight=class_weight,
                 random_state=42,
                 **mix,
@@ -285,6 +288,8 @@ class MLModelTrainer:
         # Vectorize texts
         X = self.vectorizer.fit_transform(texts)
 
+        points = X.toarray()
+
         # Create model based on type
         if model_type == "kmeans":
             self.model = KMeans(
@@ -294,13 +299,19 @@ class MLModelTrainer:
                 random_state=parameters.get("random_state", 42),
             )
         elif model_type == "hierarchical":
+            distance = parameters.get("affinity", "euclidean")
+            # A document with no usable words has no angle, and metric="cosine"
+            # refuses the whole run. Precomputed distances keep it, far from the rest.
+            if distance == "cosine":
+                points = cosine_distances(points)
+                distance = "precomputed"
             self.model = AgglomerativeClustering(
                 n_clusters=parameters.get("n_clusters", 8),
                 linkage=parameters.get("linkage", "ward"),
                 # scikit-learn renamed AgglomerativeClustering's `affinity` kwarg
                 # to `metric` (removed in newer releases) — the external parameter
                 # name in AVAILABLE_MODELS/the API stays "affinity" for callers.
-                metric=parameters.get("affinity", "euclidean"),
+                metric=distance,
             )
         elif model_type == "dbscan":
             self.model = DBSCAN(
@@ -312,7 +323,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported clustering model type: {model_type}")
 
         # Train model
-        labels = self.model.fit_predict(X.toarray())
+        labels = self.model.fit_predict(points)
 
         # Store clustering data for visualization
         embeddings = X.toarray()
