@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
 from ..db import db
 from ..active_learning.loop import training_refusal
+from ..annotation_queue import apply_saved_annotations
 from ..models import ALRound, Model, Dataset, TrainingJob
 from ..db_utils import project_belongs_to_owner
 from ..job_state import (
@@ -14,6 +15,8 @@ from ..job_state import (
 import logging
 import os
 import json
+
+import pandas as pd
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -29,8 +32,10 @@ CLASS_WEIGHT_PARAMETER = {
 }
 
 # Available model types and their parameters: what the wizard offers and what
-# parameter_refusal accepts, read from the same table. A rule limits `parameter`
-# to `options` when the values in its `when` are chosen, and `reason` says why.
+# parameter_refusal accepts, read from the same table. A number stays within min
+# and max, and at_most_rows also keeps it within the Dataset's rows. A rule limits
+# `parameter` to `options` when its `when` holds, and `reason` says why in words.
+# `when` names parameter values, or `multiclass` for a Dataset of over two labels.
 AVAILABLE_MODELS = {
     "classification": {
         "svm": {
@@ -204,6 +209,12 @@ AVAILABLE_MODELS = {
                     "options": ["lbfgs", "newton-cg", "sag", "saga"],
                     "reason": "Training with no penalty cannot use the liblinear solver.",
                 },
+                {
+                    "when": {"multiclass": True},
+                    "parameter": "solver",
+                    "options": ["lbfgs", "newton-cg", "sag", "saga"],
+                    "reason": "The liblinear solver handles two labels only. Choose another solver for this Dataset.",
+                },
             ],
         },
     },
@@ -216,6 +227,7 @@ AVAILABLE_MODELS = {
                     "type": "int",
                     "min": 2,
                     "max": 20,
+                    "at_most_rows": True,
                     "default": 8,
                     "description": "Number of clusters",
                 },
@@ -249,6 +261,7 @@ AVAILABLE_MODELS = {
                     "type": "int",
                     "min": 2,
                     "max": 20,
+                    "at_most_rows": True,
                     "default": 8,
                     "description": "Number of clusters",
                 },
@@ -505,6 +518,21 @@ def validate_model_task_compatibility(model_type, task_type):
     return True, None
 
 
+def _label_count(dataset):
+    """How many labels training would see, or None if the file cannot be read."""
+    try:
+        rows = apply_saved_annotations(pd.read_csv(dataset.file_path), dataset)
+    except (OSError, ValueError):
+        return None
+    return rows.iloc[:, 1].nunique() if rows.shape[1] > 1 else None
+
+
+def _rule_holds(rule, chosen, dataset):
+    if rule["when"].get("multiclass"):
+        return dataset is not None and (_label_count(dataset) or 0) > 2
+    return all(chosen.get(name) == value for name, value in rule["when"].items())
+
+
 def _number_refusal(label, value, field):
     """Why this value does not fit its catalogue entry, or None."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -531,9 +559,11 @@ def _field_refusal(name, value, field):
     return None
 
 
-def parameter_refusal(model_type, parameters):
+def parameter_refusal(model_type, parameters, dataset=None):
     """Why these parameters cannot train this model type, or None. Everything
-    comes from the model's catalogue entry."""
+    comes from the model's catalogue entry. With a Dataset, its size and labels
+    count too; reading the labels costs a file read, so only a choice a
+    `multiclass` rule forbids does so."""
     if not isinstance(parameters, dict):
         return "parameters must be an object"
 
@@ -547,9 +577,13 @@ def parameter_refusal(model_type, parameters):
 
     chosen = {name: field["default"] for name, field in fields.items()} | parameters
 
+    if dataset is not None:
+        for name, field in fields.items():
+            if field.get("at_most_rows") and chosen[name] > dataset.row_count:
+                return f"{field['description']} cannot be more than the {dataset.row_count} rows in this Dataset."
+
     for rule in info.get("rules", []):
-        holds = all(chosen.get(name) == value for name, value in rule["when"].items())
-        if holds and chosen.get(rule["parameter"]) not in rule["options"]:
+        if chosen.get(rule["parameter"]) not in rule["options"] and _rule_holds(rule, chosen, dataset):
             return rule["reason"]
     return None
 
@@ -670,7 +704,7 @@ def create_model():
             return jsonify({"error": compat_error}), 400
 
         # Validate parameters
-        refusal = parameter_refusal(model_type, data["parameters"])
+        refusal = parameter_refusal(model_type, data["parameters"], dataset)
         if refusal:
             return jsonify({"error": refusal}), 400
 
@@ -728,7 +762,7 @@ def update_model(model_id):
 
         # Update parameters if provided
         if "parameters" in data:
-            refusal = parameter_refusal(model.model_type, data["parameters"])
+            refusal = parameter_refusal(model.model_type, data["parameters"], model.dataset)
             if refusal:
                 return jsonify({"error": refusal}), 400
             model.parameters = data["parameters"]
@@ -1197,7 +1231,7 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
         return {"error": compat_error}, 400
 
     # A Model saved before a combination was refused must not reach the worker.
-    refusal = parameter_refusal(model.model_type, model.parameters or {})
+    refusal = parameter_refusal(model.model_type, model.parameters or {}, dataset)
     if refusal:
         db.session.rollback()  # release the model row lock
         return {"error": refusal}, 400

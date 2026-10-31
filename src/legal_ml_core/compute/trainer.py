@@ -202,6 +202,11 @@ class MLModelTrainer:
         elif model_type == "logistic_regression":
             penalty = parameters.get("penalty", "l2")
             solver = parameters.get("solver", "lbfgs")
+            # Creation refuses this unless the Dataset could not be read then.
+            if solver == "liblinear" and len(set(labels)) > 2:
+                raise ValueError(
+                    "The liblinear solver handles two labels only. Choose another solver for this Dataset."
+                )
             # Without a ratio, scikit-learn 1.8 and later fit elasticnet as plain l2.
             mix = {"l1_ratio": parameters.get("l1_ratio", 0.5)} if penalty == "elasticnet" else {}
             self.model = LogisticRegression(

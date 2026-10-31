@@ -21,6 +21,7 @@ DOCUMENTS = [
     "the jury returned a guilty verdict after the trial",
 ]
 TWO_LABELS = ["civil", "criminal"] * 15
+THREE_LABELS = ["civil", "criminal", "family"] * 10
 
 
 def _dataset(app, tmp_path, task_type, labels, documents=None):
@@ -49,6 +50,11 @@ def datasets(app, tmp_path):
         "clustering": _dataset(app, tmp_path, "clustering", ["x"] * 30),
         "topic_modeling": _dataset(app, tmp_path, "topic_modeling", ["x"] * 30),
     }
+
+
+@pytest.fixture
+def multiclass(app, tmp_path):
+    return _dataset(app, tmp_path, "classification", THREE_LABELS)
 
 
 def _create(client, auth_headers, dataset_id, model_type, parameters):
@@ -146,6 +152,20 @@ def test_every_offered_value_trains_or_is_refused_at_creation(
     if refusal:
         rules = AVAILABLE_MODELS[category][model_type]["rules"]
         assert refusal in [rule["reason"] for rule in rules]
+
+
+@pytest.mark.parametrize(
+    "penalty, solver", list(product(["l1", "l2", "elasticnet", "none"], ["liblinear", "lbfgs", "newton-cg", "sag", "saga"]))
+)
+def test_every_solver_and_penalty_trains_or_is_refused_on_three_labels(
+    client, auth_headers, app, fake_redis, multiclass, penalty, solver
+):
+    refusal = _train_or_refuse(
+        client, auth_headers, app, fake_redis, multiclass, "logistic_regression", {"penalty": penalty, "solver": solver}
+    )
+
+    rules = AVAILABLE_MODELS["classification"]["logistic_regression"]["rules"]
+    assert refusal is None or refusal in [rule["reason"] for rule in rules]
 
 
 @pytest.mark.parametrize(
@@ -311,3 +331,98 @@ def test_a_saved_value_out_of_range_is_refused_at_start(client, auth_headers, fa
     assert response.status_code == 400
     assert "between 0.001 and 100" in response.get_json()["error"]
     assert fake_redis.llen("training_queue") == 0
+
+
+# ------------------------------------------------------------- the Dataset's say
+
+
+LIBLINEAR_TWO_LABELS = "The liblinear solver handles two labels only. Choose another solver for this Dataset."
+
+
+def test_liblinear_is_refused_on_a_dataset_with_more_than_two_labels(client, auth_headers, multiclass):
+    response = _create(client, auth_headers, multiclass, "logistic_regression", {"solver": "liblinear"})
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == LIBLINEAR_TWO_LABELS
+
+
+def test_liblinear_is_accepted_on_two_labels(client, auth_headers, datasets):
+    response = _create(client, auth_headers, datasets["classification"], "logistic_regression", {"solver": "liblinear"})
+
+    assert response.status_code == 201
+
+
+def test_liblinear_is_refused_on_edit_to_a_multiclass_dataset(client, auth_headers, multiclass):
+    model_id = _create(client, auth_headers, multiclass, "logistic_regression", {}).get_json()["model"]["id"]
+
+    response = client.put(f"/api/models/{model_id}", json={"parameters": {"solver": "liblinear"}}, headers=auth_headers)
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == LIBLINEAR_TWO_LABELS
+
+
+def test_a_saved_liblinear_model_is_refused_at_start_on_a_multiclass_dataset(client, auth_headers, multiclass):
+    model_id = _saved(multiclass, "logistic_regression", {"solver": "liblinear"})
+
+    response = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == LIBLINEAR_TWO_LABELS
+
+
+def test_liblinear_on_labels_only_the_annotations_give_is_refused(client, auth_headers, app, tmp_path):
+    from legal_ml_core import AnnotationTask
+
+    dataset_id = _dataset(app, tmp_path, "classification", TWO_LABELS)
+    db.session.add(
+        AnnotationTask(
+            dataset_id=dataset_id, item_index=0, text=DOCUMENTS[0], status="annotated",
+            annotation_label="family",
+        )
+    )
+    db.session.commit()
+
+    response = _create(client, auth_headers, dataset_id, "logistic_regression", {"solver": "liblinear"})
+
+    assert response.status_code == 400
+    assert "liblinear" in response.get_json()["error"]
+
+
+def test_a_dataset_that_cannot_be_read_gets_a_plain_failure_in_training(
+    client, auth_headers, app, fake_redis, multiclass
+):
+    dataset = db.session.get(Dataset, multiclass)
+    readable, dataset.file_path = dataset.file_path, "/nowhere.csv"
+    db.session.commit()
+
+    created = _create(client, auth_headers, multiclass, "logistic_regression", {"solver": "liblinear"})
+    assert created.status_code == 201
+    model_id = created.get_json()["model"]["id"]
+    assert client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers).status_code == 200
+
+    task = json.loads(fake_redis.rpop("training_queue"))
+    task["dataset_path"] = readable
+    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"])
+
+    job = db.session.get(TrainingJob, task["job_id"])
+    assert job.status == "failed"
+    assert job.error_message == LIBLINEAR_TWO_LABELS
+
+
+@pytest.mark.parametrize("model_type", ["kmeans", "hierarchical"])
+def test_more_clusters_than_documents_is_refused(client, auth_headers, app, tmp_path, model_type):
+    dataset_id = _dataset(app, tmp_path, "clustering", ["x"] * 6, DOCUMENTS)
+
+    response = _create(client, auth_headers, dataset_id, model_type, {"n_clusters": 7})
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Number of clusters cannot be more than the 6 rows in this Dataset."
+
+
+def test_the_default_cluster_count_is_refused_on_a_smaller_dataset(client, auth_headers, app, tmp_path):
+    dataset_id = _dataset(app, tmp_path, "clustering", ["x"] * 6, DOCUMENTS)
+
+    response = _create(client, auth_headers, dataset_id, "kmeans", {})
+
+    assert response.status_code == 400
+    assert "6 rows" in response.get_json()["error"]
