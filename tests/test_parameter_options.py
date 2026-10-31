@@ -207,3 +207,107 @@ def test_a_document_with_no_usable_words_does_not_stop_cosine_clustering(
     )
 
     assert refusal is None
+
+
+# ---------------------------------------------------------------------- ranges
+
+
+@pytest.mark.parametrize(
+    "model_type, chosen, says",
+    [
+        ("logistic_regression", {"C": 0}, "between 0.001 and 100"),
+        ("logistic_regression", {"C": -1}, "between 0.001 and 100"),
+        ("svm", {"C": 0}, "between 0.001 and 100"),
+        ("svm", {"degree": 0}, "between 1 and 10"),
+        ("random_forest", {"n_estimators": 0}, "Number of trees must be between 1 and 1000"),
+        ("random_forest", {"max_depth": 0}, "Maximum tree depth must be between 1 and 50"),
+        ("decision_tree", {"max_depth": 51}, "Maximum tree depth must be between 1 and 50"),
+        ("decision_tree", {"min_samples_split": 1}, "between 2 and 100"),
+        ("naive_bayes", {"alpha": 0}, "between 0.01 and 10"),
+        ("logistic_regression", {"l1_ratio": 1.5}, "between 0 and 1"),
+    ],
+)
+def test_a_value_out_of_range_is_refused_when_created(client, auth_headers, datasets, model_type, chosen, says):
+    response = _create(client, auth_headers, datasets["classification"], model_type, chosen)
+
+    assert response.status_code == 400
+    assert says in response.get_json()["error"]
+
+
+@pytest.mark.parametrize(
+    "model_type, chosen",
+    [
+        ("kmeans", {"n_clusters": 1}),
+        ("kmeans", {"max_iter": 0}),
+        ("hierarchical", {"n_clusters": 1}),
+        ("dbscan", {"eps": 0}),
+        ("dbscan", {"min_samples": 0}),
+    ],
+)
+def test_clustering_ranges_are_checked_as_well(client, auth_headers, datasets, model_type, chosen):
+    assert _create(client, auth_headers, datasets["clustering"], model_type, chosen).status_code == 400
+
+
+@pytest.mark.parametrize(
+    "model_type, chosen",
+    [
+        ("lda", {"n_components": 1}),
+        ("lda", {"learning_decay": 0.4}),
+        ("nmf", {"n_components": 51}),
+        ("nmf", {"alpha": -0.1}),
+    ],
+)
+def test_topic_model_ranges_are_checked_as_well(client, auth_headers, datasets, model_type, chosen):
+    assert _create(client, auth_headers, datasets["topic_modeling"], model_type, chosen).status_code == 400
+
+
+@pytest.mark.parametrize("chosen", [{"epochs": 0}, {"batch_size": 2}, {"learning_rate": 0}, {"max_length": 2048}])
+def test_transformer_ranges_are_checked_as_well(client, auth_headers, datasets, chosen):
+    assert _create(client, auth_headers, datasets["classification"], "legalbert", chosen).status_code == 400
+
+
+@pytest.mark.parametrize("value", [True, "2", float("nan"), float("inf")])
+def test_something_other_than_a_number_is_refused(client, auth_headers, datasets, value):
+    response = client.post(
+        "/api/models/",
+        data=json.dumps({"name": "M", "dataset_id": datasets["classification"], "model_type": "svm", "parameters": {"C": value}}),
+        content_type="application/json",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "Regularisation parameter" in response.get_json()["error"]
+
+
+def test_a_fraction_is_refused_where_a_whole_number_is_needed(client, auth_headers, datasets):
+    response = _create(client, auth_headers, datasets["classification"], "random_forest", {"n_estimators": 2.5})
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Number of trees must be a whole number."
+
+
+def test_a_value_out_of_range_is_refused_on_edit(client, auth_headers, datasets):
+    created = _create(client, auth_headers, datasets["classification"], "svm", {"C": 1})
+    model_id = created.get_json()["model"]["id"]
+
+    response = client.put(f"/api/models/{model_id}", json={"parameters": {"C": 0}}, headers=auth_headers)
+
+    assert response.status_code == 400
+    assert "between 0.001 and 100" in response.get_json()["error"]
+
+
+def _saved(dataset_id, model_type, parameters):
+    model = Model(owner_id=TEST_USER_ID, dataset_id=dataset_id, name="M", model_type=model_type, parameters=parameters)
+    db.session.add(model)
+    db.session.commit()
+    return model.id
+
+
+def test_a_saved_value_out_of_range_is_refused_at_start(client, auth_headers, fake_redis, datasets):
+    model_id = _saved(datasets["classification"], "svm", {"C": 0})
+
+    response = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
+
+    assert response.status_code == 400
+    assert "between 0.001 and 100" in response.get_json()["error"]
+    assert fake_redis.llen("training_queue") == 0

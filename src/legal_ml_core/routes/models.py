@@ -511,6 +511,9 @@ def _number_refusal(label, value, field):
         return f"{label} must be a number."
     if field["type"] == "int" and not isinstance(value, int):
         return f"{label} must be a whole number."
+    # Written so that NaN, which compares false, is refused too.
+    if not field["min"] <= value <= field["max"]:
+        return f"{label} must be between {field['min']:g} and {field['max']:g}."
     return None
 
 
