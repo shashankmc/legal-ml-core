@@ -8,6 +8,8 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-31
+
 ### Fixed
 
 - **Every earlier release ignored the parameters chosen for a Model.** The worker
@@ -223,7 +225,8 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.2.0...v0.3.0
