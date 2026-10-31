@@ -277,7 +277,7 @@ citation metadata is in [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this
 repository" button reads it); [`codemeta.json`](codemeta.json) carries the
 same metadata in CodeMeta form.
 
-> Chakravarthy, S. (2026). *legal-ml-core* (Version 0.5.1) [Computer
+> Chakravarthy, S. (2026). *legal-ml-core* (Version 0.5.2) [Computer
 > software]. Maastricht University. https://github.com/shashankmc/legal-ml-core
 
 **DOI:** not yet assigned. Once the repository is connected to Zenodo, each
