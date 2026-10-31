@@ -560,12 +560,13 @@ def _field_refusal(name, value, field):
 
 
 def parameter_refusal(model_type, parameters, dataset=None):
-    """Why these parameters cannot train this model type, or None. Everything
-    comes from the model's catalogue entry. With a Dataset, its size and labels
-    count too; reading the labels costs a file read, so only a choice a
-    `multiclass` rule forbids does so."""
+    """Why these parameters cannot train this model type, or None, as the body of
+    a 400: `error` in words, and `field` for the parameter to change when one is
+    at fault. Everything comes from the model's catalogue entry. With a Dataset,
+    its size and labels count too; reading the labels costs a file read, so only
+    a choice a `multiclass` rule forbids does so."""
     if not isinstance(parameters, dict):
-        return "parameters must be an object"
+        return {"error": "parameters must be an object"}
 
     info = AVAILABLE_MODELS[model_category_for(model_type)][model_type]
     fields = info["parameters"]
@@ -573,18 +574,19 @@ def parameter_refusal(model_type, parameters, dataset=None):
         if name in fields:
             refusal = _field_refusal(name, value, fields[name])
             if refusal:
-                return refusal
+                return {"error": refusal, "field": name}
 
     chosen = {name: field["default"] for name, field in fields.items()} | parameters
 
     if dataset is not None:
         for name, field in fields.items():
             if field.get("at_most_rows") and chosen[name] > dataset.row_count:
-                return f"{field['description']} cannot be more than the {dataset.row_count} rows in this Dataset."
+                refusal = f"{field['description']} cannot be more than the {dataset.row_count} rows in this Dataset."
+                return {"error": refusal, "field": name}
 
     for rule in info.get("rules", []):
         if chosen.get(rule["parameter"]) not in rule["options"] and _rule_holds(rule, chosen, dataset):
-            return rule["reason"]
+            return {"error": rule["reason"], "field": rule["parameter"]}
     return None
 
 
@@ -706,7 +708,7 @@ def create_model():
         # Validate parameters
         refusal = parameter_refusal(model_type, data["parameters"], dataset)
         if refusal:
-            return jsonify({"error": refusal}), 400
+            return jsonify(refusal), 400
 
         # Resolve project_id: explicit payload value takes precedence over dataset's project.
         # `Project` belongs to the host app, not this package, so existence is checked via
@@ -764,7 +766,7 @@ def update_model(model_id):
         if "parameters" in data:
             refusal = parameter_refusal(model.model_type, data["parameters"], model.dataset)
             if refusal:
-                return jsonify({"error": refusal}), 400
+                return jsonify(refusal), 400
             model.parameters = data["parameters"]
 
         db.session.commit()
@@ -1234,7 +1236,7 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
     refusal = parameter_refusal(model.model_type, model.parameters or {}, dataset)
     if refusal:
         db.session.rollback()  # release the model row lock
-        return {"error": refusal}, 400
+        return refusal, 400
 
     # Create training job
     training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")

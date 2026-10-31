@@ -8,6 +8,16 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- A 400 refusing a Model's parameters carries `field`, the key of the parameter to
+  change, beside `error`. A rule across two parameters names the one it limits, such
+  as `solver`. Refusals tied to no one parameter have no `field`.
+
+### Changed
+
+- `scikit-learn` is capped below 1.10, which removes the `penalty` the trainer passes.
+
 ## [0.5.1] - 2026-10-31
 
 ### Fixed

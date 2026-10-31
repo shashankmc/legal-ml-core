@@ -76,3 +76,7 @@ def test_spec_refs_resolve():
         for part in ref.split("/"):
             assert part in node, f"unresolved $ref #/{ref}"
             node = node[part]
+
+
+def test_spec_describes_the_refused_field():
+    assert "field" in _load_spec()["components"]["schemas"]["Error"]["properties"]

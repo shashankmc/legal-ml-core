@@ -25,6 +25,8 @@ info:
 
     Error bodies are `{"error": "<message>"}`; annotation routes also return
     `"success": false`. Unexpected failures return 500 with the same shape.
+    A 400 refusing a Model's parameters, on creating or editing it or starting
+    its training, adds `"field"` when one parameter is at fault.
   license:
     name: MIT
     identifier: MIT
@@ -1513,6 +1515,12 @@ components:
       required: [error]
       properties:
         error: { type: string }
+        field:
+          type: string
+          description: >-
+            The key of the parameter to change, on a refusal tied to one. For a
+            rule across two parameters, the one the rule limits, such as `solver`
+            when a penalty needs another solver. Absent otherwise.
         success: { type: boolean, const: false }
     PlotlyFigureJson:
       type: string

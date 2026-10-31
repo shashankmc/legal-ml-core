@@ -426,3 +426,81 @@ def test_the_default_cluster_count_is_refused_on_a_smaller_dataset(client, auth_
 
     assert response.status_code == 400
     assert "6 rows" in response.get_json()["error"]
+
+
+# ------------------------------------------------------------------ the refusal
+
+
+def test_a_refusal_at_creation_names_the_field(client, auth_headers, datasets):
+    response = _create(client, auth_headers, datasets["classification"], "logistic_regression", {"C": -1})
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "Inverse regularisation strength must be between 0.001 and 100.",
+        "field": "C",
+    }
+
+
+def test_a_refusal_on_edit_names_the_field(client, auth_headers, datasets):
+    created = _create(client, auth_headers, datasets["classification"], "svm", {"C": 1})
+    model_id = created.get_json()["model"]["id"]
+
+    response = client.put(f"/api/models/{model_id}", json={"parameters": {"degree": 0}}, headers=auth_headers)
+
+    assert response.status_code == 400
+    assert response.get_json()["field"] == "degree"
+
+
+@pytest.mark.parametrize("route", ["/api/models/{}/train", "/api/training/start"])
+def test_a_refusal_at_start_names_the_field(client, auth_headers, datasets, route):
+    model_id = _saved(datasets["classification"], "svm", {"C": 0})
+
+    response = client.post(route.format(model_id), json={"model_id": model_id}, headers=auth_headers)
+
+    assert response.status_code == 400
+    assert response.get_json()["field"] == "C"
+
+
+def test_a_refusal_about_the_dataset_names_the_field_to_change(client, auth_headers, app, tmp_path):
+    dataset_id = _dataset(app, tmp_path, "clustering", ["x"] * 6, DOCUMENTS)
+
+    response = _create(client, auth_headers, dataset_id, "kmeans", {})
+
+    assert response.get_json()["field"] == "n_clusters"
+
+
+def test_a_rule_about_the_labels_names_the_solver(client, auth_headers, multiclass):
+    response = _create(client, auth_headers, multiclass, "logistic_regression", {"solver": "liblinear"})
+
+    assert response.get_json()["field"] == "solver"
+
+
+@pytest.mark.parametrize(
+    "model_type, chosen, field",
+    [
+        ("logistic_regression", {"penalty": "l1", "solver": "lbfgs"}, "solver"),
+        ("logistic_regression", {"penalty": "elasticnet", "solver": "lbfgs"}, "solver"),
+        ("logistic_regression", {"penalty": "none", "solver": "liblinear"}, "solver"),
+        ("hierarchical", {"linkage": "ward", "affinity": "cosine"}, "affinity"),
+    ],
+)
+def test_a_rule_across_two_settings_names_the_one_to_change(model_type, chosen, field):
+    assert parameter_refusal(model_type, chosen)["field"] == field
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "M", "model_type": "svm", "parameters": "C=1"},
+        {"name": "M", "model_type": "kmeans", "parameters": {}},
+        {"name": "M", "model_type": "nothing", "parameters": {}},
+    ],
+)
+def test_a_refusal_about_no_one_setting_names_no_field(client, auth_headers, datasets, body):
+    response = client.post(
+        "/api/models/", json={**body, "dataset_id": datasets["classification"]}, headers=auth_headers
+    )
+
+    assert response.status_code == 400
+    assert "error" in response.get_json()
+    assert "field" not in response.get_json()
