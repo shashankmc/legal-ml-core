@@ -28,6 +28,7 @@ CLASS_WEIGHT_PARAMETER = {
     "type": "select",
     "options": ["none", "balanced"],
     "default": "none",
+    "label": "Balance Labels",
     "description": "Give rare labels more weight in training",
 }
 
@@ -36,6 +37,7 @@ CLASS_WEIGHT_PARAMETER = {
 # and max, and at_most_rows also keeps it within the Dataset's rows. A rule limits
 # `parameter` to `options` when its `when` holds, and `reason` says why in words.
 # `when` names parameter values, or `multiclass` for a Dataset of over two labels.
+# `label` is what the wizard calls a setting, and refusals call it the same.
 AVAILABLE_MODELS = {
     "classification": {
         "svm": {
@@ -43,12 +45,14 @@ AVAILABLE_MODELS = {
             "description": "Linear and non-linear classification using support vectors",
             "parameters": {
                 "kernel": {
+                    "label": "Kernel",
                     "type": "select",
                     "options": ["linear", "rbf", "poly", "sigmoid"],
                     "default": "rbf",
                     "description": "Kernel type",
                 },
                 "C": {
+                    "label": "Regularisation (C)",
                     "type": "float",
                     "min": 0.001,
                     "max": 100.0,
@@ -56,12 +60,14 @@ AVAILABLE_MODELS = {
                     "description": "Regularisation parameter",
                 },
                 "gamma": {
+                    "label": "Gamma",
                     "type": "select",
                     "options": ["scale", "auto"],
                     "default": "scale",
                     "description": "Kernel coefficient",
                 },
                 "degree": {
+                    "label": "Degree",
                     "type": "int",
                     "min": 1,
                     "max": 10,
@@ -76,6 +82,7 @@ AVAILABLE_MODELS = {
             "description": "Tree-based classification with interpretable rules",
             "parameters": {
                 "max_depth": {
+                    "label": "Maximum Tree Depth",
                     "type": "int",
                     "min": 1,
                     "max": 50,
@@ -83,6 +90,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum tree depth",
                 },
                 "min_samples_split": {
+                    "label": "Min Samples to Split",
                     "type": "int",
                     "min": 2,
                     "max": 100,
@@ -90,6 +98,7 @@ AVAILABLE_MODELS = {
                     "description": "Minimum samples to split",
                 },
                 "min_samples_leaf": {
+                    "label": "Min Samples per Category",
                     "type": "int",
                     "min": 1,
                     "max": 50,
@@ -97,6 +106,7 @@ AVAILABLE_MODELS = {
                     "description": "Minimum samples per leaf",
                 },
                 "criterion": {
+                    "label": "Split Criterion",
                     "type": "select",
                     "options": ["gini", "entropy"],
                     "default": "gini",
@@ -110,6 +120,7 @@ AVAILABLE_MODELS = {
             "description": "Ensemble of decision trees for robust classification",
             "parameters": {
                 "n_estimators": {
+                    "label": "Number of Trees",
                     "type": "int",
                     "min": 1,
                     "max": 1000,
@@ -117,6 +128,7 @@ AVAILABLE_MODELS = {
                     "description": "Number of trees",
                 },
                 "max_depth": {
+                    "label": "Maximum Tree Depth",
                     "type": "int",
                     "min": 1,
                     "max": 50,
@@ -124,6 +136,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum tree depth",
                 },
                 "min_samples_split": {
+                    "label": "Min Samples to Split",
                     "type": "int",
                     "min": 2,
                     "max": 100,
@@ -131,6 +144,7 @@ AVAILABLE_MODELS = {
                     "description": "Minimum samples to split",
                 },
                 "min_samples_leaf": {
+                    "label": "Min Samples per Leaf",
                     "type": "int",
                     "min": 1,
                     "max": 50,
@@ -145,6 +159,7 @@ AVAILABLE_MODELS = {
             "description": "Probabilistic classifier based on Bayes theorem",
             "parameters": {
                 "alpha": {
+                    "label": "Alpha (Smoothing)",
                     "type": "float",
                     "min": 0.01,
                     "max": 10.0,
@@ -152,6 +167,7 @@ AVAILABLE_MODELS = {
                     "description": "Smoothing parameter",
                 },
                 "fit_prior": {
+                    "label": "Learn Class Probabilities",
                     "type": "boolean",
                     "default": True,
                     "description": "Learn class prior probabilities",
@@ -163,6 +179,7 @@ AVAILABLE_MODELS = {
             "description": "Linear classification with probabilistic output",
             "parameters": {
                 "C": {
+                    "label": "Regularisation (C)",
                     "type": "float",
                     "min": 0.001,
                     "max": 100.0,
@@ -170,18 +187,21 @@ AVAILABLE_MODELS = {
                     "description": "Inverse regularisation strength",
                 },
                 "penalty": {
+                    "label": "Penalty",
                     "type": "select",
                     "options": ["l2", "l1", "elasticnet", "none"],
                     "default": "l2",
                     "description": "Regularization penalty",
                 },
                 "solver": {
+                    "label": "Solver",
                     "type": "select",
                     "options": ["lbfgs", "newton-cg", "liblinear", "sag", "saga"],
                     "default": "lbfgs",
                     "description": "Optimisation algorithm",
                 },
                 "l1_ratio": {
+                    "label": "Elasticnet Mix",
                     "type": "float",
                     "min": 0.0,
                     "max": 1.0,
@@ -224,6 +244,7 @@ AVAILABLE_MODELS = {
             "description": "Partition-based clustering algorithm",
             "parameters": {
                 "n_clusters": {
+                    "label": "Number of Clusters",
                     "type": "int",
                     "min": 2,
                     "max": 20,
@@ -232,12 +253,14 @@ AVAILABLE_MODELS = {
                     "description": "Number of clusters",
                 },
                 "init": {
+                    "label": "Initialisation Method",
                     "type": "select",
                     "options": ["k-means++", "random"],
                     "default": "k-means++",
                     "description": "Initialisation method",
                 },
                 "max_iter": {
+                    "label": "Max Iterations",
                     "type": "int",
                     "min": 10,
                     "max": 1000,
@@ -245,6 +268,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum iterations",
                 },
                 "random_state": {
+                    "label": "Random Seed",
                     "type": "int",
                     "min": 0,
                     "max": 1000,
@@ -258,6 +282,7 @@ AVAILABLE_MODELS = {
             "description": "Tree-based clustering with different linkage methods",
             "parameters": {
                 "n_clusters": {
+                    "label": "Number of Clusters",
                     "type": "int",
                     "min": 2,
                     "max": 20,
@@ -266,12 +291,14 @@ AVAILABLE_MODELS = {
                     "description": "Number of clusters",
                 },
                 "linkage": {
+                    "label": "Linkage Method",
                     "type": "select",
                     "options": ["ward", "complete", "average", "single"],
                     "default": "ward",
                     "description": "Linkage criterion",
                 },
                 "affinity": {
+                    "label": "Affinity (Distance Metric)",
                     "type": "select",
                     "options": ["euclidean", "l1", "l2", "manhattan", "cosine"],
                     "default": "euclidean",
@@ -292,6 +319,7 @@ AVAILABLE_MODELS = {
             "description": "Density-based clustering with noise detection",
             "parameters": {
                 "eps": {
+                    "label": "Epsilon (Neighbourhood Size)",
                     "type": "float",
                     "min": 0.01,
                     "max": 10.0,
@@ -299,6 +327,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum distance between samples",
                 },
                 "min_samples": {
+                    "label": "Min Cluster Size",
                     "type": "int",
                     "min": 1,
                     "max": 100,
@@ -306,6 +335,7 @@ AVAILABLE_MODELS = {
                     "description": "Minimum samples in neighbourhood",
                 },
                 "metric": {
+                    "label": "Distance Metric",
                     "type": "select",
                     "options": ["euclidean", "manhattan", "cosine"],
                     "default": "euclidean",
@@ -320,6 +350,7 @@ AVAILABLE_MODELS = {
             "description": "Probabilistic topic modelling using LDA",
             "parameters": {
                 "n_components": {
+                    "label": "Number of Topics",
                     "type": "int",
                     "min": 2,
                     "max": 50,
@@ -327,6 +358,7 @@ AVAILABLE_MODELS = {
                     "description": "Number of topics",
                 },
                 "max_iter": {
+                    "label": "Max Iterations",
                     "type": "int",
                     "min": 10,
                     "max": 1000,
@@ -334,6 +366,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum iterations",
                 },
                 "learning_decay": {
+                    "label": "Learning Decay",
                     "type": "float",
                     "min": 0.5,
                     "max": 1.0,
@@ -341,6 +374,7 @@ AVAILABLE_MODELS = {
                     "description": "Learning rate decay",
                 },
                 "random_state": {
+                    "label": "Random Seed",
                     "type": "int",
                     "min": 0,
                     "max": 1000,
@@ -354,6 +388,7 @@ AVAILABLE_MODELS = {
             "description": "Topic modelling using NMF decomposition",
             "parameters": {
                 "n_components": {
+                    "label": "Number of Topics",
                     "type": "int",
                     "min": 2,
                     "max": 50,
@@ -361,6 +396,7 @@ AVAILABLE_MODELS = {
                     "description": "Number of topics",
                 },
                 "max_iter": {
+                    "label": "Max Iterations",
                     "type": "int",
                     "min": 100,
                     "max": 2000,
@@ -368,6 +404,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum iterations",
                 },
                 "alpha": {
+                    "label": "Alpha (Regularisation)",
                     "type": "float",
                     "min": 0.0,
                     "max": 1.0,
@@ -375,6 +412,7 @@ AVAILABLE_MODELS = {
                     "description": "Regularisation strength",
                 },
                 "random_state": {
+                    "label": "Random Seed",
                     "type": "int",
                     "min": 0,
                     "max": 1000,
@@ -390,12 +428,14 @@ AVAILABLE_MODELS = {
             "description": "BERT model fine-tuned on legal text",
             "parameters": {
                 "model_name": {
+                    "label": "Variant",
                     "type": "select",
                     "options": ["nlpaueb/legal-bert-base-uncased"],
                     "default": "nlpaueb/legal-bert-base-uncased",
                     "description": "LegalBERT variant",
                 },
                 "max_length": {
+                    "label": "Maximum Document Length",
                     "type": "int",
                     "min": 128,
                     "max": 512,
@@ -403,6 +443,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum sequence length",
                 },
                 "learning_rate": {
+                    "label": "Learning Rate",
                     "type": "float",
                     "min": 1e-6,
                     "max": 1e-2,
@@ -410,6 +451,7 @@ AVAILABLE_MODELS = {
                     "description": "Learning rate",
                 },
                 "batch_size": {
+                    "label": "Batch Size",
                     "type": "int",
                     "min": 4,
                     "max": 32,
@@ -417,6 +459,7 @@ AVAILABLE_MODELS = {
                     "description": "Training batch size",
                 },
                 "epochs": {
+                    "label": "Training Epochs",
                     "type": "int",
                     "min": 1,
                     "max": 10,
@@ -430,12 +473,14 @@ AVAILABLE_MODELS = {
             "description": "Robustly optimised BERT approach",
             "parameters": {
                 "model_name": {
+                    "label": "Model Size",
                     "type": "select",
                     "options": ["roberta-base", "roberta-large"],
                     "default": "roberta-base",
                     "description": "RoBERTa model size",
                 },
                 "max_length": {
+                    "label": "Maximum Document Length",
                     "type": "int",
                     "min": 128,
                     "max": 512,
@@ -443,6 +488,7 @@ AVAILABLE_MODELS = {
                     "description": "Maximum sequence length",
                 },
                 "learning_rate": {
+                    "label": "Learning Rate",
                     "type": "float",
                     "min": 1e-6,
                     "max": 1e-2,
@@ -450,6 +496,7 @@ AVAILABLE_MODELS = {
                     "description": "Learning rate",
                 },
                 "batch_size": {
+                    "label": "Batch Size",
                     "type": "int",
                     "min": 4,
                     "max": 32,
@@ -457,6 +504,7 @@ AVAILABLE_MODELS = {
                     "description": "Training batch size",
                 },
                 "epochs": {
+                    "label": "Training Epochs",
                     "type": "int",
                     "min": 1,
                     "max": 10,
@@ -533,6 +581,11 @@ def _rule_holds(rule, chosen, dataset):
     return all(chosen.get(name) == value for name, value in rule["when"].items())
 
 
+def _plain_number(value):
+    """A limit as a person writes it: 0.000001, not 1e-06."""
+    return f"{value:f}".rstrip("0").rstrip(".")
+
+
 def _number_refusal(label, value, field):
     """Why this value does not fit its catalogue entry, or None."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -541,12 +594,12 @@ def _number_refusal(label, value, field):
         return f"{label} must be a whole number."
     # Written so that NaN, which compares false, is refused too.
     if not field["min"] <= value <= field["max"]:
-        return f"{label} must be between {field['min']:g} and {field['max']:g}."
+        return f"{label} must be between {_plain_number(field['min'])} and {_plain_number(field['max'])}."
     return None
 
 
 def _field_refusal(name, value, field):
-    label = field.get("description", name)
+    label = field["label"]
     # "No limit" (e.g. max_depth) is a choice, and the wizard's default.
     if value is None and field["default"] is None:
         return None
@@ -581,8 +634,8 @@ def parameter_refusal(model_type, parameters, dataset=None):
     if dataset is not None:
         for name, field in fields.items():
             if field.get("at_most_rows") and chosen[name] > dataset.row_count:
-                refusal = f"{field['description']} cannot be more than the {dataset.row_count} rows in this Dataset."
-                return {"error": refusal, "field": name}
+                rows = "1 row" if dataset.row_count == 1 else f"{dataset.row_count} rows"
+                return {"error": f"{field['label']} cannot be more than the {rows} in this Dataset.", "field": name}
 
     for rule in info.get("rules", []):
         if chosen.get(rule["parameter"]) not in rule["options"] and _rule_holds(rule, chosen, dataset):

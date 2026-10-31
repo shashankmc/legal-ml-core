@@ -2,6 +2,7 @@
 when the Model is created, and nothing that cannot train reaches the worker."""
 import json
 from itertools import product
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -239,9 +240,9 @@ def test_a_document_with_no_usable_words_does_not_stop_cosine_clustering(
         ("logistic_regression", {"C": -1}, "between 0.001 and 100"),
         ("svm", {"C": 0}, "between 0.001 and 100"),
         ("svm", {"degree": 0}, "between 1 and 10"),
-        ("random_forest", {"n_estimators": 0}, "Number of trees must be between 1 and 1000"),
-        ("random_forest", {"max_depth": 0}, "Maximum tree depth must be between 1 and 50"),
-        ("decision_tree", {"max_depth": 51}, "Maximum tree depth must be between 1 and 50"),
+        ("random_forest", {"n_estimators": 0}, "Number of Trees must be between 1 and 1000"),
+        ("random_forest", {"max_depth": 0}, "Maximum Tree Depth must be between 1 and 50"),
+        ("decision_tree", {"max_depth": 51}, "Maximum Tree Depth must be between 1 and 50"),
         ("decision_tree", {"min_samples_split": 1}, "between 2 and 100"),
         ("naive_bayes", {"alpha": 0}, "between 0.01 and 10"),
         ("logistic_regression", {"l1_ratio": 1.5}, "between 0 and 1"),
@@ -296,14 +297,14 @@ def test_something_other_than_a_number_is_refused(client, auth_headers, datasets
     )
 
     assert response.status_code == 400
-    assert "Regularisation parameter" in response.get_json()["error"]
+    assert "Regularisation (C)" in response.get_json()["error"]
 
 
 def test_a_fraction_is_refused_where_a_whole_number_is_needed(client, auth_headers, datasets):
     response = _create(client, auth_headers, datasets["classification"], "random_forest", {"n_estimators": 2.5})
 
     assert response.status_code == 400
-    assert response.get_json()["error"] == "Number of trees must be a whole number."
+    assert response.get_json()["error"] == "Number of Trees must be a whole number."
 
 
 def test_a_value_out_of_range_is_refused_on_edit(client, auth_headers, datasets):
@@ -416,7 +417,7 @@ def test_more_clusters_than_documents_is_refused(client, auth_headers, app, tmp_
     response = _create(client, auth_headers, dataset_id, model_type, {"n_clusters": 7})
 
     assert response.status_code == 400
-    assert response.get_json()["error"] == "Number of clusters cannot be more than the 6 rows in this Dataset."
+    assert response.get_json()["error"] == "Number of Clusters cannot be more than the 6 rows in this Dataset."
 
 
 def test_the_default_cluster_count_is_refused_on_a_smaller_dataset(client, auth_headers, app, tmp_path):
@@ -436,7 +437,7 @@ def test_a_refusal_at_creation_names_the_field(client, auth_headers, datasets):
 
     assert response.status_code == 400
     assert response.get_json() == {
-        "error": "Inverse regularisation strength must be between 0.001 and 100.",
+        "error": "Regularisation (C) must be between 0.001 and 100.",
         "field": "C",
     }
 
@@ -504,3 +505,86 @@ def test_a_refusal_about_no_one_setting_names_no_field(client, auth_headers, dat
     assert response.status_code == 400
     assert "error" in response.get_json()
     assert "field" not in response.get_json()
+
+
+def test_a_refusal_on_the_one_row_of_a_dataset_says_row():
+    refusal = parameter_refusal("kmeans", {}, SimpleNamespace(row_count=1))
+
+    assert refusal["error"] == "Number of Clusters cannot be more than the 1 row in this Dataset."
+
+
+# Every setting: the label the wizard shows, in the sentence the user reads.
+REFUSALS = [
+    ("svm", "kernel", "Kernel must be one of: linear, rbf, poly, sigmoid."),
+    ("svm", "C", "Regularisation (C) must be between 0.001 and 100."),
+    ("svm", "gamma", "Gamma must be one of: scale, auto."),
+    ("svm", "degree", "Degree must be between 1 and 10."),
+    ("svm", "class_weight", "Balance Labels must be one of: none, balanced."),
+    ("decision_tree", "max_depth", "Maximum Tree Depth must be between 1 and 50."),
+    ("decision_tree", "min_samples_split", "Min Samples to Split must be between 2 and 100."),
+    ("decision_tree", "min_samples_leaf", "Min Samples per Category must be between 1 and 50."),
+    ("decision_tree", "criterion", "Split Criterion must be one of: gini, entropy."),
+    ("decision_tree", "class_weight", "Balance Labels must be one of: none, balanced."),
+    ("random_forest", "n_estimators", "Number of Trees must be between 1 and 1000."),
+    ("random_forest", "max_depth", "Maximum Tree Depth must be between 1 and 50."),
+    ("random_forest", "min_samples_split", "Min Samples to Split must be between 2 and 100."),
+    ("random_forest", "min_samples_leaf", "Min Samples per Leaf must be between 1 and 50."),
+    ("random_forest", "class_weight", "Balance Labels must be one of: none, balanced."),
+    ("naive_bayes", "alpha", "Alpha (Smoothing) must be between 0.01 and 10."),
+    ("naive_bayes", "fit_prior", "Learn Class Probabilities must be true or false."),
+    ("logistic_regression", "C", "Regularisation (C) must be between 0.001 and 100."),
+    ("logistic_regression", "penalty", "Penalty must be one of: l2, l1, elasticnet, none."),
+    ("logistic_regression", "solver", "Solver must be one of: lbfgs, newton-cg, liblinear, sag, saga."),
+    ("logistic_regression", "l1_ratio", "Elasticnet Mix must be between 0 and 1."),
+    ("logistic_regression", "class_weight", "Balance Labels must be one of: none, balanced."),
+    ("kmeans", "n_clusters", "Number of Clusters must be between 2 and 20."),
+    ("kmeans", "init", "Initialisation Method must be one of: k-means++, random."),
+    ("kmeans", "max_iter", "Max Iterations must be between 10 and 1000."),
+    ("kmeans", "random_state", "Random Seed must be between 0 and 1000."),
+    ("hierarchical", "n_clusters", "Number of Clusters must be between 2 and 20."),
+    ("hierarchical", "linkage", "Linkage Method must be one of: ward, complete, average, single."),
+    ("hierarchical", "affinity", "Affinity (Distance Metric) must be one of: euclidean, l1, l2, manhattan, cosine."),
+    ("dbscan", "eps", "Epsilon (Neighbourhood Size) must be between 0.01 and 10."),
+    ("dbscan", "min_samples", "Min Cluster Size must be between 1 and 100."),
+    ("dbscan", "metric", "Distance Metric must be one of: euclidean, manhattan, cosine."),
+    ("lda", "n_components", "Number of Topics must be between 2 and 50."),
+    ("lda", "max_iter", "Max Iterations must be between 10 and 1000."),
+    ("lda", "learning_decay", "Learning Decay must be between 0.5 and 1."),
+    ("lda", "random_state", "Random Seed must be between 0 and 1000."),
+    ("nmf", "n_components", "Number of Topics must be between 2 and 50."),
+    ("nmf", "max_iter", "Max Iterations must be between 100 and 2000."),
+    ("nmf", "alpha", "Alpha (Regularisation) must be between 0 and 1."),
+    ("nmf", "random_state", "Random Seed must be between 0 and 1000."),
+    ("legalbert", "model_name", "Variant must be one of: nlpaueb/legal-bert-base-uncased."),
+    ("legalbert", "max_length", "Maximum Document Length must be between 128 and 512."),
+    ("legalbert", "learning_rate", "Learning Rate must be between 0.000001 and 0.01."),
+    ("legalbert", "batch_size", "Batch Size must be between 4 and 32."),
+    ("legalbert", "epochs", "Training Epochs must be between 1 and 10."),
+    ("roberta", "model_name", "Model Size must be one of: roberta-base, roberta-large."),
+    ("roberta", "max_length", "Maximum Document Length must be between 128 and 512."),
+    ("roberta", "learning_rate", "Learning Rate must be between 0.000001 and 0.01."),
+    ("roberta", "batch_size", "Batch Size must be between 4 and 32."),
+    ("roberta", "epochs", "Training Epochs must be between 1 and 10."),
+]
+
+
+def test_the_table_covers_every_setting_in_the_catalogue():
+    in_catalogue = {(model_type, name) for _, model_type, info in _models() for name in info["parameters"]}
+
+    assert {(model_type, name) for model_type, name, _ in REFUSALS} == in_catalogue
+
+
+@pytest.mark.parametrize("model_type, name, says", REFUSALS)
+def test_a_refusal_reads_in_the_words_of_the_wizard(model_type, name, says):
+    field = next(info for _, kind, info in _models() if kind == model_type)["parameters"][name]
+    wrong = {"select": "nonsense", "boolean": "maybe"}.get(field["type"], -1)
+
+    assert parameter_refusal(model_type, {name: wrong}) == {"error": says, "field": name}
+    assert says.startswith(field["label"])
+
+
+def test_a_value_of_no_kind_is_refused_in_the_same_words():
+    assert parameter_refusal("logistic_regression", {"C": "high"}) == {
+        "error": "Regularisation (C) must be a number.",
+        "field": "C",
+    }

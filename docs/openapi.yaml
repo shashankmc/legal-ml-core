@@ -253,7 +253,8 @@ paths:
         "200":
           description: >-
             Catalogue (object keyed by task type, or a list when filtered). Each
-            model lists its parameters with their options or min and max, and
+            model lists its parameters with their `label`, the name refusals use,
+            and their options or min and max, and
             optional rules: when `when` holds, `parameter` is limited to
             `options`, and `reason` says why. `multiclass` in `when` means a
             Dataset of more than two labels.
