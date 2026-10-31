@@ -22,6 +22,9 @@ While the version is 0.x, minor releases may contain breaking changes.
   calibration and reports `probabilities_calibrated: false`.
 - `GET /api/training/batch-prediction/<id>` answers `status: pending` from the moment
   a batch is queued, not 404 until the result arrives.
+- `penalty: none`, the `newton-cg` and `sag` solvers and `cosine` hierarchical distance
+  train, which the wizard always offered and the catalogue refused. `cosine` keeps a
+  document with no usable words, which scikit-learn's own cosine option refuses.
 - `max_depth: null`, the wizard's default for unlimited depth, is accepted.
 - `penalty: elasticnet` mixes both penalties, through a new `l1_ratio` parameter
   (default 0.5). scikit-learn 1.8 and later otherwise fit it as plain l2.
@@ -34,7 +37,20 @@ While the version is 0.x, minor releases may contain breaking changes.
   `l1` without `liblinear` or `saga`, `elasticnet` without `saga`, and `ward` linkage
   without `euclidean` or `l2`.
 - `lex_glue` is no longer a LegalBERT variant: no such model exists to download.
-- UK spelling in the model catalogue.
+- Numbers are checked against their catalogue range on create, edit and start, in
+  words: "Number of trees must be between 1 and 1000." Saved Models outside a range
+  must be edited before they retrain. Some ranges widen to what the wizard allowed:
+  `C` from 0.001, `degree` from 1, `n_estimators` from 1, `eps` from 0.01, `alpha`
+  (Naive Bayes) from 0.01, K-Means `max_iter` from 10, `batch_size` from 4.
+- `liblinear` is refused on a Dataset of more than two labels, read from the file
+  only when `liblinear` is chosen. If the file cannot be read then, training fails
+  with the same words. `n_clusters` is refused above the Dataset's rows.
+- `GET /api/models/available` gives each model's `rules`, so a client can apply the
+  dependent options, such as the solvers a penalty allows, without its own copy.
+- NMF `l1_ratio` is no longer offered: an offered mix could remove every topic and
+  fail in training. Pure L2 cannot. A saved value still applies. NMF `random_state`
+  is offered instead.
+- UK spelling across the model catalogue, including its descriptions.
 
 ## [0.5.0] - 2026-10-30
 
