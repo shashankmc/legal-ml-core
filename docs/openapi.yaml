@@ -1683,9 +1683,21 @@ components:
       properties:
         id: { type: string }
         training_job_id: { type: string }
-        step: { type: integer }
+        step:
+          type: integer
+          description: Write counter and polling cursor, not the trainer's step.
         epoch: { type: [number, "null"] }
+        training_step:
+          type: [integer, "null"]
+          description: The trainer's own step (fine-tuning only).
         metric_name: { type: string }
+        group:
+          type: string
+          enum: [train, eval, system, stage]
+          description: >-
+            Which chart the point belongs on. Older points without one
+            get one from their name: `eval_*` is eval, the run's milestones
+            are stage, and the rest are train.
         value: { type: number }
         created_at: { type: string, format: date-time }
     ModelComparison:

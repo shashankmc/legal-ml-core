@@ -47,8 +47,23 @@ class TrainingMetricCallback(TrainerCallback):
         if not logs or not self.metric_logger:
             return
         for key, value in logs.items():
-            if isinstance(value, (int, float)):
-                self.metric_logger.log(metric_name=key, value=value, epoch=state.epoch)
+            if isinstance(value, (int, float)) and not _is_summary_value(key):
+                self.metric_logger.log(
+                    metric_name=key,
+                    value=value,
+                    epoch=state.epoch,
+                    training_step=state.global_step,
+                )
+
+
+# The Trainer's end-of-run totals, plus `epoch`, which every point already
+# carries as its x value. Stored as points they would share a chart with the
+# curves at wildly different scales (total_flos is about 1e14).
+_SUMMARY_VALUES = frozenset({"total_flos", "train_runtime", "train_loss", "epoch"})
+
+
+def _is_summary_value(key):
+    return key in _SUMMARY_VALUES or key.endswith("_per_second")
 
 
 class TrainingCancelCallback(TrainerCallback):
