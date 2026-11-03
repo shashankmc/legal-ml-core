@@ -272,7 +272,7 @@ app.config["LEGAL_ML_MONITORING"] = {
     "include": ["*"],          # name globs of the points to store
     "exclude": [],             # name globs of the points not to store
     "learning_curve": False,   # accepted, not yet used
-    "system_metrics": False,   # accepted, not yet used
+    "system_metrics": False,   # record memory, GPU, speed and time left
     "flush_every_points": 50,  # write waiting metric points once this many wait
     "flush_every_seconds": 2.0,  # or once the oldest has waited this long
 }
@@ -282,6 +282,13 @@ Stage markers (`training_started`, `model_saved`, ...) are always stored. A bad
 setting in a run is refused with a 400 whose `field` is `monitoring.<setting>`; a
 bad host default stops `init_ml_feature`. Each run records the settings it used
 under `parameters.monitoring`.
+
+With `system_metrics` on, a run records `system` points: `memory_mb` (the worker
+process's memory), `gpu_memory_mb` and `gpu_use_percent` when CUDA is available,
+`samples_per_second` and, for fine-tuning, `seconds_remaining`. Fine-tuning takes
+them every `log_every_n_steps`; a classical run takes them at each stage, and its
+speed once training ends. Memory comes from psutil when it is installed, else from
+the standard library; GPU use needs pynvml.
 
 ## Experiment monitoring limitation
 
