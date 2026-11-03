@@ -123,6 +123,12 @@ class TrainingCancelCallback(TrainerCallback):
         return control
 
 
+def _monitoring(parameters):
+    """The run's monitoring settings. The worker works them out once per run and
+    passes them in; a direct caller that passes none gets the defaults."""
+    return parameters.get("monitoring") or effective_monitoring()
+
+
 # The parts of the training split a learning curve fits on (BAIGLE #93).
 LEARNING_CURVE_FRACTIONS = (0.1, 0.25, 0.5, 0.75, 1.0)
 # At most this many loss points, spread from the first iteration to max_iter.
@@ -283,7 +289,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported model type: {model_type}")
 
         # Opt-in, as it fits the algorithm several times more (BAIGLE #93).
-        if self.metric_logger and effective_monitoring(run=parameters.get("monitoring"))["learning_curve"]:
+        if self.metric_logger and _monitoring(parameters)["learning_curve"]:
             self._log_learning_curve(self.model, X_train, y_train, X_test, y_test)
             self._log_loss_by_iteration(self.model, X_train, y_train, X_test, y_test)
 
@@ -611,7 +617,7 @@ class MLModelTrainer:
             "output_dir", f"/tmp/transformer_{parameters['model_id']}"
         )
         # How often the run logs and evaluates (BAIGLE #89).
-        monitoring = effective_monitoring(run=parameters.get("monitoring"))
+        monitoring = _monitoring(parameters)
         evaluation = {"eval_strategy": monitoring["eval_strategy"]}
         if monitoring["eval_strategy"] == "steps":
             evaluation["eval_steps"] = monitoring["eval_steps"]

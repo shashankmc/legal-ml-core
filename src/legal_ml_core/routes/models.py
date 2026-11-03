@@ -5,7 +5,7 @@ from ..active_learning.loop import training_refusal
 from ..annotation_queue import apply_saved_annotations
 from ..models import ALRound, Model, Dataset, TrainingJob
 from ..db_utils import project_belongs_to_owner
-from ..monitoring import effective_monitoring, monitoring_refusal
+from ..monitoring import monitoring_refusal, run_monitoring
 from ..job_state import (
     ACTIVE_JOB_STATUSES,
     COULD_NOT_START_MESSAGE,
@@ -1387,9 +1387,7 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
         return refusal, 400
 
     # The monitoring the run uses, the host's defaults filled in (BAIGLE #89).
-    monitoring = effective_monitoring(
-        current_app.config.get("LEGAL_ML_MONITORING"), (model.parameters or {}).get("monitoring")
-    )
+    monitoring = run_monitoring(current_app.config, model.parameters)
 
     # Create training job
     # The settings snapshot is what Previous runs compares (BAIGLE #83).

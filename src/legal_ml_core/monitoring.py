@@ -85,6 +85,12 @@ def effective_monitoring(host=None, run=None):
     return deepcopy(defaults | dict(host or {}) | dict(run or {}))
 
 
+def run_monitoring(config, parameters):
+    """The settings a Model's run uses: the host's `LEGAL_ML_MONITORING`, then
+    the Model's own `parameters.monitoring`. Worked out once per run."""
+    return effective_monitoring(config.get("LEGAL_ML_MONITORING"), (parameters or {}).get("monitoring"))
+
+
 def validate_host_monitoring(config):
     """Fail at start, not on a user's first run, on a bad `LEGAL_ML_MONITORING`."""
     refusal = monitoring_refusal(config.get("LEGAL_ML_MONITORING", {}))
