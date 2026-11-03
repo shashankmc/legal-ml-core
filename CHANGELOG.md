@@ -15,6 +15,7 @@ While the version is 0.x, minor releases may contain breaking changes.
   before this release have `parameters: null`.
 - `GET /api/models/<id>/runs` lists a Model's runs newest first, owner-scoped,
   with `parameters`, the headline `scores`, `status`, `error_message` and dates.
+  It lists at most 50, and `has_more` says whether older runs exist.
 - Migration `lmc_0005_training_job_parameters` adds `training_jobs.parameters`.
   Hosts with their own Alembic graph need a merge revision.
 - EDA for Text Classification adds `keyword_stats` beside `keywords_by_class`: each
@@ -28,15 +29,16 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 - Distinctive terms that tie on lift are ordered by how many texts in the class contain
   them, then alphabetically, so the order no longer changes between requests.
-
-### Changed
-
 - `PUT /api/models/<id>` refuses a change of `parameters` with a 409 while the
   Model has a pending or running job. A rename, or the same parameters, still
   goes through.
 - A successful retrain keeps the group names saved with `PUT
   /api/models/<id>/labels` (`metrics.display_labels`) only when the run used the
-  same parameters as the run before it. Before, every retrain dropped them.
+  same parameters as the run before it. Before, every retrain dropped them. A run
+  from before `parameters` were recorded counts as different, so its names go.
+- Run `parameters` hold the catalogue defaults as well as the Model's choices, and
+  runs and the training guard compare parameters that way. A Model saved with some
+  settings, then saved again by a form that sends them all, is not a change.
 
 ## [0.5.2] - 2026-10-31
 

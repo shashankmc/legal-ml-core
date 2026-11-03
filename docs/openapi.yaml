@@ -447,8 +447,9 @@ paths:
       tags: [models]
       summary: List a model's training runs
       description: >-
-        Newest first, at most 50. Each run has the settings it started with and its
-        headline scores. `parameters` is null for runs from before settings were recorded.
+        Newest first, at most 50; `has_more` is true when older runs exist. Each run has
+        the settings it started with, the catalogue defaults filled in, and its headline
+        scores. `parameters` is null for runs from before settings were recorded.
       operationId: listModelRuns
       responses:
         "200":
@@ -461,6 +462,7 @@ paths:
                   runs:
                     type: array
                     items: { $ref: "#/components/schemas/TrainingRun" }
+                  has_more: { type: boolean }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/models/{model_id}/download:
@@ -1649,7 +1651,7 @@ components:
         progress: { type: [number, "null"] }
         parameters:
           type: [object, "null"]
-          description: The model's parameters when the run started; null for older runs.
+          description: The model's parameters when the run started, catalogue defaults filled in; null for older runs.
         metrics: { type: [object, "null"] }
         error_message: { type: [string, "null"] }
         status_message:
@@ -1665,7 +1667,7 @@ components:
         status: { type: string, enum: [pending, running, completed, failed, cancelled] }
         parameters:
           type: [object, "null"]
-          description: The model's parameters when the run started; null for older runs.
+          description: The model's parameters when the run started, catalogue defaults filled in; null for older runs.
         scores:
           type: object
           description: >-

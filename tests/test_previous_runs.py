@@ -1,5 +1,5 @@
 """Each run keeps the settings it used and the scores it got (BAIGLE #83)."""
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from legal_ml_core import Dataset, Model, TrainingJob, db
 from tests.conftest import TEST_USER_ID
@@ -44,7 +44,9 @@ def _runs(client, headers, model_id):
     return response.get_json()["runs"]
 
 
-def test_a_run_records_the_settings_it_started_with(client, auth_headers, app, fake_redis):
+def test_a_run_records_the_settings_it_started_with_defaults_filled_in(client, auth_headers, app, fake_redis):
+    """With the defaults, a run saved with some settings compares equal to the
+    same run saved by the form, which sends them all."""
     model_id = _make_model(app, {"C": 2.0})
     client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
 
@@ -52,7 +54,13 @@ def test_a_run_records_the_settings_it_started_with(client, auth_headers, app, f
     client.put(f"/api/models/{model_id}", json={"parameters": {"C": 5.0}}, headers=auth_headers)
 
     [run] = _runs(client, auth_headers, model_id)
-    assert run["parameters"] == {"C": 2.0}
+    assert run["parameters"] == {
+        "C": 2.0,
+        "penalty": "l2",
+        "solver": "lbfgs",
+        "l1_ratio": 0.5,
+        "class_weight": "none",
+    }
     assert run["status"] == "pending"
 
 
@@ -98,3 +106,25 @@ def test_another_owners_runs_are_not_found(client, auth_headers, app):
     response = client.get(f"/api/models/{model_id}/runs", headers=auth_headers)
 
     assert response.status_code == 404
+
+
+def test_runs_past_the_fiftieth_are_signalled_by_has_more(client, auth_headers, app):
+    """Without it, the 50th run would read as the Model's first."""
+    model_id = _make_model(app, {"C": 1.0})
+    for day in range(1, 52):
+        _add_run(app, model_id, datetime(2026, 8, 1) + timedelta(days=day), status="completed")
+
+    body = client.get(f"/api/models/{model_id}/runs", headers=auth_headers).get_json()
+
+    assert len(body["runs"]) == 50
+    assert body["has_more"] is True
+    assert body["runs"][-1]["created_at"] == "2026-08-03T00:00:00"
+
+
+def test_a_short_list_of_runs_has_no_more(client, auth_headers, app):
+    model_id = _make_model(app, {"C": 1.0})
+    _add_run(app, model_id, datetime(2026, 10, 1), status="completed")
+
+    body = client.get(f"/api/models/{model_id}/runs", headers=auth_headers).get_json()
+
+    assert body["has_more"] is False

@@ -566,6 +566,15 @@ def validate_model_task_compatibility(model_type, task_type):
     return True, None
 
 
+def effective_parameters(model_type, parameters):
+    """The settings a run uses: the catalogue's defaults, then the Model's own
+    choices. Runs are recorded and compared on these, so a Model saved with a
+    few settings and the form's full copy of the same choices count as equal."""
+    category = model_category_for(model_type)
+    fields = AVAILABLE_MODELS[category][model_type]["parameters"] if category else {}
+    return {name: field["default"] for name, field in fields.items()} | dict(parameters or {})
+
+
 def _label_count(dataset):
     """How many labels training would see, or None if the file cannot be read."""
     try:
@@ -629,7 +638,7 @@ def parameter_refusal(model_type, parameters, dataset=None):
             if refusal:
                 return {"error": refusal, "field": name}
 
-    chosen = {name: field["default"] for name, field in fields.items()} | parameters
+    chosen = effective_parameters(model_type, parameters)
 
     if dataset is not None:
         for name, field in fields.items():
@@ -726,6 +735,9 @@ HEADLINE_SCORES = (
 )
 
 
+RUNS_LIMIT = 50
+
+
 def _run_dict(job):
     metrics = job.metrics or {}
     return {
@@ -750,13 +762,20 @@ def list_model_runs(model_id):
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
+        # One past the limit tells whether older runs exist, so the oldest
+        # listed run is not taken for the Model's first.
         jobs = (
             TrainingJob.query.filter_by(model_id=model.id, owner_id=owner_id)
             .order_by(TrainingJob.created_at.desc())
-            .limit(50)
+            .limit(RUNS_LIMIT + 1)
             .all()
         )
-        return jsonify({"runs": [_run_dict(job) for job in jobs]}), 200
+        return jsonify(
+            {
+                "runs": [_run_dict(job) for job in jobs[:RUNS_LIMIT]],
+                "has_more": len(jobs) > RUNS_LIMIT,
+            }
+        ), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -849,6 +868,22 @@ def create_model():
         return jsonify({"error": str(e)}), 500
 
 
+def _update_refusal(model, active, data):
+    """(body, status) when this edit cannot apply, or None."""
+    if "parameters" not in data:
+        return None
+    # A run already has its settings; a rename can still go through. The form
+    # sends every setting, so compare with the defaults filled in.
+    if active and effective_parameters(model.model_type, data["parameters"]) != effective_parameters(
+        model.model_type, model.parameters
+    ):
+        return {"error": SETTINGS_LOCKED_MESSAGE, "job_id": str(active.id)}, 409
+    refusal = parameter_refusal(model.model_type, data["parameters"], model.dataset)
+    if refusal:
+        return refusal, 400
+    return None
+
+
 @models_bp.route("/<model_id>", methods=["PUT"])
 @jwt_required()
 def update_model(model_id):
@@ -861,11 +896,10 @@ def update_model(model_id):
             return jsonify({"error": "Model not found"}), 404
 
         data = request.get_json()
-
-        # A run already has its settings; a rename can still go through.
-        if active and "parameters" in data and data["parameters"] != model.parameters:
+        refused = _update_refusal(model, active, data)
+        if refused:
             db.session.rollback()  # release the model row lock
-            return jsonify({"error": SETTINGS_LOCKED_MESSAGE, "job_id": str(active.id)}), 409
+            return jsonify(refused[0]), refused[1]
 
         # Update name if provided
         if "name" in data:
@@ -873,10 +907,6 @@ def update_model(model_id):
 
         # Update parameters if provided
         if "parameters" in data:
-            refusal = parameter_refusal(model.model_type, data["parameters"], model.dataset)
-            if refusal:
-                db.session.rollback()  # release the model row lock
-                return jsonify(refusal), 400
             model.parameters = data["parameters"]
 
         db.session.commit()
@@ -1357,7 +1387,7 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
         owner_id=owner_id,
         model_id=model_id,
         status="pending",
-        parameters=dict(model.parameters or {}),
+        parameters=effective_parameters(model.model_type, model.parameters),
     )
     db.session.add(training_job)
     if al_round_id:

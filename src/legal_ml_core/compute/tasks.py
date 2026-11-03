@@ -100,7 +100,16 @@ def _job_left_active_in_db(job_id):
 def _with_kept_group_names(model, job_id, metrics):
     """Fresh metrics, plus the group names the user gave the last run when this
     run used the same settings. Group numbers do not carry over between settings,
-    so changed (or unknown, for runs older than the snapshot) settings drop them."""
+    so changed settings drop them.
+
+    Settings compare with the catalogue defaults filled in, so an older snapshot
+    of only some settings matches the form's full copy of the same choices. A
+    run from before snapshots has no record of its settings, and the Model may
+    have been edited since, so its names are dropped too: names on the wrong
+    groups are worse than lost names."""
+    # Here, not at the top: routes.models imports the training code's siblings.
+    from ..routes.models import effective_parameters
+
     names = (model.metrics or {}).get("display_labels")
     if not names:
         return metrics
@@ -116,7 +125,9 @@ def _with_kept_group_names(model, job_id, metrics):
     )
     if job is None or previous is None or previous.parameters is None:
         return metrics
-    if job.parameters != previous.parameters:
+    if effective_parameters(model.model_type, job.parameters) != effective_parameters(
+        model.model_type, previous.parameters
+    ):
         return metrics
     return {**metrics, "display_labels": names}
 
