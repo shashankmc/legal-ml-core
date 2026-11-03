@@ -253,3 +253,17 @@ def test_the_trainer_gets_the_monitoring_the_run_recorded(app, client, auth_head
 
     assert seen == _recorded(client, auth_headers, model_id)
     assert (seen["log_every_n_steps"], seen["eval_strategy"]) == (50, "steps")
+
+
+def test_the_api_docs_list_every_monitoring_setting_with_its_default():
+    from pathlib import Path
+
+    import yaml
+
+    from legal_ml_core.monitoring import MONITORING_FIELDS
+
+    spec = yaml.safe_load((Path(__file__).parent.parent / "docs" / "openapi.yaml").read_text())
+    documented = spec["components"]["schemas"]["Monitoring"]["properties"]
+
+    assert {name: field["default"] for name, field in documented.items()} == DEFAULT_MONITORING
+    assert set(documented) == set(MONITORING_FIELDS)
