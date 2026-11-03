@@ -8,6 +8,20 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- EDA for Text Classification adds `keyword_stats` beside `keywords_by_class`: each
+  distinctive term with `in_class` (texts in the class that contain it), `overall`
+  (texts that contain it) and `lift`. `keywords_by_class` keeps its shape.
+- `GET /api/datasets/<id>/rows` takes `term` and `label` to show only the texts behind
+  a distinctive term. `total_rows` and `has_more` then count the filtered rows, and the
+  count matches `in_class`.
+
+### Changed
+
+- Distinctive terms that tie on lift are ordered by how many texts in the class contain
+  them, then alphabetically, so the order no longer changes between requests.
+
 ## [0.5.2] - 2026-10-31
 
 ### Added

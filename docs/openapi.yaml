@@ -179,9 +179,17 @@ paths:
       parameters:
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - name: term
+          in: query
+          description: Only rows whose text contains this word, matched as a whole word in any case, the way EDA counts `in_class`. 400 when the Dataset has no text column.
+          schema: { type: string }
+        - name: label
+          in: query
+          description: Only rows in this class. 400 when the Dataset has no label column.
+          schema: { type: string }
       responses:
         "200":
-          description: A window of rows
+          description: A window of rows. With `term` or `label`, `total_rows` and `has_more` count the filtered rows.
           content:
             application/json:
               schema:
@@ -194,6 +202,7 @@ paths:
                   limit: { type: integer }
                   has_more: { type: boolean }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/datasets/{dataset_id}/preprocessing-options:
     parameters:
@@ -221,7 +230,11 @@ paths:
     get:
       tags: [eda]
       summary: Exploratory data analysis
-      description: Overview, per-column analysis, data quality, statistics, task-specific analysis and insights.
+      description: >-
+        Overview, per-column analysis, data quality, statistics, task-specific analysis and insights.
+        For Text Classification, `task_specific_analysis.keywords_by_class` lists each class's distinctive
+        terms and `keyword_stats` gives the same terms as `{term, in_class, overall, lift}`, where
+        `in_class` and `overall` count texts.
       operationId: getEda
       responses:
         "200": { $ref: "#/components/responses/AnyObject" }
