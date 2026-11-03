@@ -854,12 +854,18 @@ def create_model():
 def update_model(model_id):
     try:
         owner_id = get_jwt_identity()
-        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
+        # Locked like a start, so a start and a settings change serialise.
+        model, active = _lock_model_and_find_active_job(model_id, owner_id)
 
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
         data = request.get_json()
+
+        # A run already has its settings; a rename can still go through.
+        if active and "parameters" in data and data["parameters"] != model.parameters:
+            db.session.rollback()  # release the model row lock
+            return jsonify({"error": SETTINGS_LOCKED_MESSAGE, "job_id": str(active.id)}), 409
 
         # Update name if provided
         if "name" in data:
@@ -869,6 +875,7 @@ def update_model(model_id):
         if "parameters" in data:
             refusal = parameter_refusal(model.model_type, data["parameters"], model.dataset)
             if refusal:
+                db.session.rollback()  # release the model row lock
                 return jsonify(refusal), 400
             model.parameters = data["parameters"]
 
@@ -1296,6 +1303,9 @@ def _lock_model_and_find_active_job(model_id, owner_id):
 
 
 MODEL_BUSY_MESSAGE = "This Model is already training. Retrain when it finishes."
+SETTINGS_LOCKED_MESSAGE = (
+    "This Model is training, so its settings cannot change. Adjust them when it finishes."
+)
 
 
 def start_training_job(owner_id, model_id, data, al_round_id=None):
