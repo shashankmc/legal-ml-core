@@ -2,6 +2,7 @@ import json
 
 import joblib
 import numpy as np
+from sklearn.base import clone
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.decomposition import NMF, LatentDirichletAllocation
@@ -82,6 +83,10 @@ class TrainingCancelCallback(TrainerCallback):
             self.cancelled = True
             control.should_training_stop = True
         return control
+
+
+# The parts of the training split a learning curve fits on (BAIGLE #93).
+LEARNING_CURVE_FRACTIONS = (0.1, 0.25, 0.5, 0.75, 1.0)
 
 
 class MLModelTrainer:
@@ -237,6 +242,10 @@ class MLModelTrainer:
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
 
+        # Opt-in, as it fits the algorithm several times more (BAIGLE #93).
+        if self.metric_logger and effective_monitoring(run=parameters.get("monitoring"))["learning_curve"]:
+            self._log_learning_curve(self.model, X_train, y_train, X_test, y_test)
+
         # Train model
         self.model.fit(X_train, y_train)
 
@@ -296,6 +305,32 @@ class MLModelTrainer:
         )
 
         return metrics
+
+    def _stop_if_requested(self):
+        if self.cancel_check and self.cancel_check():
+            raise TrainingCancelled()
+
+    def _log_learning_curve(self, estimator, X_train, y_train, X_test, y_test):
+        """Fits a copy of the estimator on growing parts of the training split
+        and scores it on that part (`train`) and on the evaluation split (`eval`).
+        Each point's training_step is the part's size. The split is already
+        shuffled, so a part is its first rows; a part with one label cannot be
+        fitted and is left out. Stop is honoured between fits."""
+        n_rows = X_train.shape[0]
+        sizes = sorted({max(1, round(fraction * n_rows)) for fraction in LEARNING_CURVE_FRACTIONS})
+        for size in sizes:
+            self._stop_if_requested()
+            X_part, y_part = X_train[:size], y_train[:size]
+            if len(np.unique(y_part)) < 2:
+                continue
+            fitted = clone(estimator).fit(X_part, y_part)
+            for group, X, y in (("train", X_part, y_part), ("eval", X_test, y_test)):
+                self.metric_logger.log(
+                    metric_name=f"learning_curve_{group}_accuracy",
+                    value=accuracy_score(y, fitted.predict(X)),
+                    training_step=size,
+                    group=group,
+                )
 
     def train_clustering_model(self, texts, model_type, parameters):
         # Create vectorizer
