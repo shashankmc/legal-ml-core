@@ -28,9 +28,6 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 - Distinctive terms that tie on lift are ordered by how many texts in the class contain
   them, then alphabetically, so the order no longer changes between requests.
-
-### Changed
-
 - `PUT /api/models/<id>` refuses a change of `parameters` with a 409 while the
   Model has a pending or running job. A rename, or the same parameters, still
   goes through.
