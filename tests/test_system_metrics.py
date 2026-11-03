@@ -102,6 +102,33 @@ def test_a_classical_run_records_how_fast_it_trained(client, auth_headers, app, 
     assert speed[0]["group"] == "system" and speed[0]["value"] > 0
 
 
+def test_a_classical_runs_speed_counts_only_the_fit_of_the_model_it_keeps(
+    client, auth_headers, app, fake_redis, dataset_id, monkeypatch
+):
+    """With learning curves on, logistic regression is fitted many more times
+    (about 17 here). Each fit is slowed to 0.1 s, so a speed that counted them
+    would be under 20 rows / 1.7 s."""
+    import time
+
+    from sklearn.linear_model import LogisticRegression
+
+    fit = LogisticRegression.fit
+
+    def slow_fit(self, *args, **kwargs):
+        time.sleep(0.1)
+        return fit(self, *args, **kwargs)
+
+    monkeypatch.setattr(LogisticRegression, "fit", slow_fit)
+
+    points = run_classical(
+        client, auth_headers, app, fake_redis, dataset_id, {"system_metrics": True, "learning_curve": True}
+    )
+
+    [speed] = [p["value"] for p in points if p["metric_name"] == "samples_per_second"]
+    # The 16 training rows in one slowed fit, with room for a slow machine.
+    assert 16 / 0.5 < speed < 16 / 0.1
+
+
 def test_a_classical_run_records_its_gpu_when_there_is_one(client, auth_headers, app, fake_redis, dataset_id, fake_gpu):
     fake_gpu()
 

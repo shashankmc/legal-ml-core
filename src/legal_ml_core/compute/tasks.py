@@ -299,7 +299,6 @@ def process_training_task(
 
         # Train model based on task type
         parameters = _chosen_parameters(task_info, monitoring)
-        fit_started = time.monotonic()
         if task_info["model_type"] in ["legalbert", "roberta"]:
             parameters["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
@@ -332,11 +331,6 @@ def process_training_task(
 
         set_live({"status": "running", "progress": 75})
         reached("training_done")
-        # Fine-tuning reports its own speed as it goes; a classical fit is one call.
-        if monitoring.get("system_metrics") and task_info["model_type"] not in ["legalbert", "roberta"]:
-            fit_seconds = time.monotonic() - fit_started
-            if fit_seconds > 0:
-                metric_logger.log("samples_per_second", len(texts) / fit_seconds, group="system")
 
         # Save model
         model_path = get_storage_backend().get_model_path(model_storage_path, model_id)

@@ -296,7 +296,8 @@ With `system_metrics` on, a run records `system` points: `memory_mb` (the worker
 process's memory), `gpu_memory_mb` and `gpu_use_percent` when CUDA is available,
 `samples_per_second` and, for fine-tuning, `seconds_remaining`. Fine-tuning takes
 them every `log_every_n_steps`; a classical run takes them at each stage, and its
-speed once training ends. Memory comes from psutil when it is installed, else from
+speed over the fit of the model it keeps, in training rows a second. Preparing the
+text, scoring and a learning curve's extra fits are not counted. Memory comes from psutil when it is installed, else from
 the standard library; GPU use needs pynvml.
 
 ## Experiment monitoring limitation

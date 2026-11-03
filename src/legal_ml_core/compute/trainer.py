@@ -294,7 +294,7 @@ class MLModelTrainer:
             self._log_loss_by_iteration(self.model, X_train, y_train, X_test, y_test)
 
         # Train model
-        self.model.fit(X_train, y_train)
+        self._timed_fit(lambda: self.model.fit(X_train, y_train), X_train.shape[0], parameters)
 
         # Calibrate probabilities on a held-out split so displayed confidence is
         # closer to a true probability. Not all classifiers expose probabilities
@@ -352,6 +352,18 @@ class MLModelTrainer:
         )
 
         return metrics
+
+    def _timed_fit(self, fit, n_samples, parameters):
+        """Fits the model the run keeps. With resource readings on, logs how
+        many samples a second that fit alone took (BAIGLE #94): not the
+        vectorising, the evaluation or a learning curve's extra fits.
+        Fine-tuning reports its own speed as it goes."""
+        started = time.monotonic()
+        result = fit()
+        seconds = time.monotonic() - started
+        if self.metric_logger and _monitoring(parameters)["system_metrics"] and seconds > 0:
+            self.metric_logger.log("samples_per_second", n_samples / seconds, group="system")
+        return result
 
     def _stop_if_requested(self):
         if self.cancel_check and self.cancel_check():
@@ -457,7 +469,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported clustering model type: {model_type}")
 
         # Train model
-        labels = self.model.fit_predict(points)
+        labels = self._timed_fit(lambda: self.model.fit_predict(points), X.shape[0], parameters)
 
         # Store clustering data for visualization
         embeddings = X.toarray()
@@ -525,7 +537,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported topic modeling type: {model_type}")
 
         # Train model
-        self.model.fit(X)
+        self._timed_fit(lambda: self.model.fit(X), X.shape[0], parameters)
         if not self.model.components_.any():
             raise ValueError(
                 "The regularisation (alpha) removed every topic on this Dataset. Choose a smaller alpha."

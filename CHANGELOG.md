@@ -34,7 +34,9 @@ While the version is 0.x, minor releases may contain breaking changes.
   readings as `system` points: `memory_mb`, `gpu_memory_mb` and `gpu_use_percent`
   (only when CUDA is available), `samples_per_second` and, when fine-tuning,
   `seconds_remaining`. Fine-tuning takes them every `log_every_n_steps`; a
-  classical run takes them at each stage. Off by default. No new dependency:
+  classical run takes them at each stage, and times its speed over the fit of
+  the model it keeps, in training rows a second, so a learning curve's extra fits
+  do not slow it. Off by default. No new dependency:
   memory comes from psutil when it is installed, else from the standard library.
 
 - Each training job records `parameters`, the Model's settings when the run
