@@ -33,7 +33,11 @@ While the version is 0.x, minor releases may contain breaking changes.
   goes through.
 - A successful retrain keeps the group names saved with `PUT
   /api/models/<id>/labels` (`metrics.display_labels`) only when the run used the
-  same parameters as the run before it. Before, every retrain dropped them.
+  same parameters as the run before it. Before, every retrain dropped them. A run
+  from before `parameters` were recorded counts as different, so its names go.
+- Run `parameters` hold the catalogue defaults as well as the Model's choices, and
+  runs and the training guard compare parameters that way. A Model saved with some
+  settings, then saved again by a form that sends them all, is not a change.
 
 ## [0.5.2] - 2026-10-31
 
