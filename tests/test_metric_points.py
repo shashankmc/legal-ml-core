@@ -192,3 +192,15 @@ def test_points_are_written_once_the_oldest_has_waited_long_enough(app):
         clock.now = 2.0
         logger.log("loss", 0.7)
         assert [p.step for p in _points(job_id)] == [0, 1, 2]
+
+
+def test_a_stage_marker_is_written_at_once_with_the_points_before_it(app):
+    """Nothing flushes between log calls, and a stage can run for minutes:
+    a buffered `training_started` would hide that training began."""
+    job_id = _make_job(app)
+    with app.app_context():
+        logger = MetricLogger(job_id, flush_every_points=100, flush_every_seconds=60, clock=_Clock())
+        logger.log("loss", 0.9)
+        logger.log("training_started", 1.0)
+
+        assert [p.metric_name for p in _points(job_id)] == ["loss", "training_started"]

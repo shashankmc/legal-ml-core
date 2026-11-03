@@ -54,6 +54,7 @@ class MetricLogger:
         self._counter += 1
         if not self._buffer:
             self._oldest_buffered_at = self._clock()
+        group = group or metric_group_for(metric_name)
         self._buffer.append(
             dict(
                 training_job_id=self.training_job_id,
@@ -61,12 +62,13 @@ class MetricLogger:
                 epoch=epoch,
                 training_step=training_step,
                 metric_name=metric_name,
-                metric_group=group or metric_group_for(metric_name),
+                metric_group=group,
                 value=float(value),
             )
         )
         if (
-            len(self._buffer) >= self._flush_every_points
+            group == "stage"
+            or len(self._buffer) >= self._flush_every_points
             or self._clock() - self._oldest_buffered_at >= self._flush_every_seconds
         ):
             self.flush()
