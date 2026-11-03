@@ -12,7 +12,8 @@ from legal_ml_core import TrainingJob, db
 from legal_ml_core.compute.tasks import process_training_task
 from legal_ml_core.compute.trainer import MLModelTrainer
 from legal_ml_core.monitoring import effective_monitoring
-from tests.test_monitoring_settings import _start, dataset_id  # noqa: F401
+from tests.monitoring_helpers import run_classical, start_run, stored_points
+from tests.test_monitoring_settings import dataset_id  # noqa: F401
 
 CLASSIFIERS = ["svm", "decision_tree", "random_forest", "naive_bayes", "logistic_regression"]
 
@@ -121,20 +122,12 @@ def test_a_stop_is_honoured_between_learning_curve_fits(fake_redis, classificati
     assert trainer.model is None or not hasattr(trainer.model, "classes_")  # the real fit never ran
 
 
-def _points(client, auth_headers, job_id):
-    return client.get(f"/api/training/{job_id}/metrics", headers=auth_headers).get_json()["points"]
-
-
 def test_a_run_stores_its_learning_curve_against_training_set_size(app, client, auth_headers, fake_redis, dataset_id):
-    _start(client, auth_headers, dataset_id, {"learning_curve": True})
-    task = json.loads(fake_redis.rpop("training_queue"))
+    points = run_classical(client, auth_headers, app, fake_redis, dataset_id, {"learning_curve": True})
 
-    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=MLModelTrainer)
-
-    assert db.session.get(TrainingJob, task["job_id"]).status == "completed"
     curve = [
         (p["metric_name"], p["group"], p["training_step"])
-        for p in _points(client, auth_headers, task["job_id"])
+        for p in points
         if p["metric_name"].startswith("learning_curve_")
     ]
     assert ("learning_curve_train_accuracy", "train", 16) in curve
@@ -143,7 +136,7 @@ def test_a_run_stores_its_learning_curve_against_training_set_size(app, client, 
 
 
 def test_a_stop_during_the_learning_curve_cancels_the_run(app, client, auth_headers, fake_redis, dataset_id):
-    _start(client, auth_headers, dataset_id, {"learning_curve": True})
+    start_run(client, auth_headers, dataset_id, {"learning_curve": True})
     task = json.loads(fake_redis.rpop("training_queue"))
 
     def stopping_on_the_first_curve_point(redis_client, metric_logger, cancel_check):
@@ -161,7 +154,7 @@ def test_a_stop_during_the_learning_curve_cancels_the_run(app, client, auth_head
     process_training_task(task, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=stopping_on_the_first_curve_point)
 
     assert db.session.get(TrainingJob, task["job_id"]).status == "cancelled"
-    names = [p["metric_name"] for p in _points(client, auth_headers, task["job_id"])]
+    names = [p["metric_name"] for p in stored_points(client, auth_headers, task["job_id"])]
     assert names[-1] == "training_cancelled"
     assert names.count("learning_curve_eval_accuracy") == 1  # no fit after the Stop
 
