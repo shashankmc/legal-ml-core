@@ -79,3 +79,29 @@ def validate_host_monitoring(config):
     refusal = monitoring_refusal(config.get("LEGAL_ML_MONITORING", {}))
     if refusal:
         raise ValueError(f"LEGAL_ML_MONITORING: {refusal['error']} ({refusal['field']})")
+
+
+def keeps_point(monitoring, metric_name):
+    """Whether a run with these settings stores this point. Stage markers always
+    are: they say where the run got to."""
+    if metric_name in STAGE_MARKERS:
+        return True
+    included = any(fnmatchcase(metric_name, glob) for glob in monitoring["include"])
+    return included and not any(fnmatchcase(metric_name, glob) for glob in monitoring["exclude"])
+
+
+class KeptPoints:
+    """A metric logger that passes on only the points the run keeps. Anything
+    else, a flush say, goes straight to the logger it wraps."""
+
+    def __init__(self, metric_logger, monitoring):
+        self._metric_logger = metric_logger
+        self._monitoring = monitoring
+
+    def log(self, metric_name, value, *args, **kwargs):
+        if not keeps_point(self._monitoring, metric_name):
+            return None
+        return self._metric_logger.log(metric_name, value, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._metric_logger, name)

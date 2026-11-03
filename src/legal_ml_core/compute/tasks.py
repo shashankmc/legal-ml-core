@@ -6,6 +6,7 @@ from datetime import datetime
 import joblib
 import pandas as pd
 import redis as redis_lib
+from flask import current_app
 
 from ..active_learning.scoring import queue_pool_scoring, verify_finished_model
 from ..annotation_queue import apply_saved_annotations
@@ -13,6 +14,7 @@ from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from ..metric_groups import metric_group_for
 from ..models import Dataset, Model, TrainingJob, TrainingMetricPoint
+from ..monitoring import KeptPoints, effective_monitoring
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
@@ -144,6 +146,16 @@ def _learning_settings(parameters):
     return {name: value for name, value in parameters.items() if name != "monitoring"}
 
 
+def _monitoring(task_info):
+    """The run's monitoring, as the API recorded it. A message queued before
+    monitoring settings existed gets this worker's defaults."""
+    if task_info.get("monitoring"):
+        return task_info["monitoring"]
+    return effective_monitoring(
+        current_app.config.get("LEGAL_ML_MONITORING"), (task_info.get("parameters") or {}).get("monitoring")
+    )
+
+
 def _chosen_parameters(task_info):
     """The flat parameters the trainer reads: the Model's choices, nested under
     "parameters" in the queue message. The server's own values go last, so a
@@ -177,7 +189,8 @@ def process_training_task(
     """
     job_id = task_info["job_id"]
     model_id = task_info["model_id"]
-    metric_logger = MetricLogger(job_id)
+    monitoring = _monitoring(task_info)
+    metric_logger = KeptPoints(MetricLogger(job_id), monitoring)
 
     def cancel_requested():
         """Stop check: the Redis flag (cheap, set by /stop), else the DB row,
