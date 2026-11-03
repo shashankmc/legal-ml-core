@@ -8,6 +8,16 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Each training job records `parameters`, the Model's settings when the run
+  started, so retraining no longer loses what an earlier run used. Jobs from
+  before this release have `parameters: null`.
+- `GET /api/models/<id>/runs` lists a Model's runs newest first, owner-scoped,
+  with `parameters`, the headline `scores`, `status`, `error_message` and dates.
+- Migration `lmc_0005_training_job_parameters` adds `training_jobs.parameters`.
+  Hosts with their own Alembic graph need a merge revision.
+
 ## [0.5.2] - 2026-10-31
 
 ### Added
