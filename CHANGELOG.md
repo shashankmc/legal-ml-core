@@ -40,6 +40,14 @@ While the version is 0.x, minor releases may contain breaking changes.
   runs and the training guard compare parameters that way. A Model saved with some
   settings, then saved again by a form that sends them all, is not a change.
 
+- **Breaking for hosts:** the worker's training stack (transformers with torch,
+  accelerate, spaCy, NLTK, LIME and SHAP) moved to the `[compute]` extra. Install
+  `legal-ml-core[compute]` wherever `run_ml_worker` runs. The API process needs
+  only `legal-ml-core`, so an API image no longer carries torch. With PyPI's
+  CUDA build, that was several GB.
+- `run_ml_worker` is imported on first use, so `import legal_ml_core` and
+  `init_ml_feature` no longer load the training stack.
+
 ## [0.5.2] - 2026-10-31
 
 ### Added
