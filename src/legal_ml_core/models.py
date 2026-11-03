@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from .db import MLBase, db
+from .metric_groups import metric_group_for
 
 
 class MLProject(MLBase):
@@ -482,7 +483,12 @@ class TrainingMetricPoint(MLBase):
     )
     step = db.Column(db.Integer, nullable=False)
     epoch = db.Column(db.Float, nullable=True)
+    # The trainer's own step (HF `global_step`); None for classical algorithms.
+    training_step = db.Column(db.Integer, nullable=True)
     metric_name = db.Column(db.String(100), nullable=False)
+    # One of metric_groups.METRIC_GROUPS. None on rows stored before groups
+    # existed; to_dict derives theirs from the name.
+    metric_group = db.Column(db.String(20), nullable=True)
     value = db.Column(db.Float, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -501,7 +507,9 @@ class TrainingMetricPoint(MLBase):
             "training_job_id": self.training_job_id,
             "step": self.step,
             "epoch": self.epoch,
+            "training_step": self.training_step,
             "metric_name": self.metric_name,
+            "group": self.metric_group or metric_group_for(self.metric_name),
             "value": self.value,
             "created_at": self.created_at.isoformat(),
         }

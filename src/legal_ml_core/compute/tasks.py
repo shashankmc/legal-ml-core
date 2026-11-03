@@ -11,6 +11,7 @@ from ..active_learning.scoring import queue_pool_scoring, verify_finished_model
 from ..annotation_queue import apply_saved_annotations
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
+from ..metric_groups import metric_group_for
 from ..models import Dataset, Model, TrainingJob, TrainingMetricPoint
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
@@ -29,24 +30,29 @@ class MetricLogger:
 
     `step` is a per-instance monotonically increasing polling cursor (used only
     by the `/training/<job_id>/metrics?since_step=` endpoint) — it is NOT the
-    algorithm's own notion of step/epoch. The semantic x-axis for charts is
-    `epoch`, which is populated for the HuggingFace Trainer path (via
-    TrainingMetricCallback) and left None for the classical sklearn algorithms'
-    coarse phase markers.
+    algorithm's own notion of step/epoch. The semantic x-axes for charts are
+    `training_step` and `epoch`, which are populated for the HuggingFace Trainer
+    path (via TrainingMetricCallback) and left None for the classical sklearn
+    algorithms' coarse phase markers.
+
+    `group` is one of metric_groups.METRIC_GROUPS; left out, it is derived from
+    the name.
     """
 
     def __init__(self, training_job_id):
         self.training_job_id = training_job_id
         self._counter = 0
 
-    def log(self, metric_name, value, epoch=None):
+    def log(self, metric_name, value, epoch=None, training_step=None, group=None):
         step = self._counter
         self._counter += 1
         point = TrainingMetricPoint(
             training_job_id=self.training_job_id,
             step=step,
             epoch=epoch,
+            training_step=training_step,
             metric_name=metric_name,
+            metric_group=group or metric_group_for(metric_name),
             value=float(value),
         )
         db.session.add(point)

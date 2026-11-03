@@ -18,6 +18,14 @@ While the version is 0.x, minor releases may contain breaking changes.
   It lists at most 50, and `has_more` says whether older runs exist.
 - Migration `lmc_0005_training_job_parameters` adds `training_jobs.parameters`.
   Hosts with their own Alembic graph need a merge revision.
+- Training metric points carry a `group` (`train`, `eval`, `system` or `stage`) and,
+  for fine-tuning, `training_step`, the trainer's own step. `step` stays the
+  polling cursor. Points stored before this release get a group from their name:
+  `eval_*` is eval, the run's milestones (`training_started`, `model_saved`, ...)
+  are stage, and the rest are train.
+- Migration `lmc_0006_metric_point_group_and_training_step` adds
+  `training_metric_points.metric_group` and `training_step`, both nullable. Hosts
+  with their own Alembic graph need a merge revision.
 - EDA for Text Classification adds `keyword_stats` beside `keywords_by_class`: each
   distinctive term with `in_class` (texts in the class that contain it), `overall`
   (texts that contain it) and `lift`. `keywords_by_class` keeps its shape.
@@ -27,6 +35,10 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ### Changed
 
+- Fine-tuning no longer stores the trainer's end-of-run summary (`total_flos`,
+  `train_runtime`, `train_loss`, the `*_per_second` rates) or `epoch` as metric
+  points, so they no longer flatten the curves. Hosts that read those names from
+  `GET /api/training/<job_id>/metrics` will not find them in new runs.
 - Distinctive terms that tie on lift are ordered by how many texts in the class contain
   them, then alphabetically, so the order no longer changes between requests.
 - `PUT /api/models/<id>` refuses a change of `parameters` with a 409 while the

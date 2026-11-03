@@ -114,7 +114,9 @@ Hyperparameters are stored as JSON in `Model.parameters`. Evaluation results
 (accuracy, precision, recall, F1, confusion matrix and its labels,
 classification report, or clustering/topic outputs) are stored as JSON in
 `Model.metrics` and `TrainingJob.metrics`. Per-step curves are rows of
-`TrainingMetricPoint` (`GET /api/training/<job_id>/metrics`).
+`TrainingMetricPoint` (`GET /api/training/<job_id>/metrics`). Each point has a
+`group` (`train`, `eval`, `system` or `stage`); fine-tuning points also have
+`training_step`, the trainer's own step, while `step` is only the polling cursor.
 
 ### Export
 

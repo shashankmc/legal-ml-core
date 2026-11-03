@@ -103,6 +103,46 @@ def test_training_metrics_since_step_cursor(client, auth_headers, app):
     assert [p["step"] for p in points] == [2]
 
 
+def test_training_metrics_return_the_group_and_the_training_step(client, auth_headers, app):
+    _, job_id = _make_model_and_job(app)
+
+    with app.app_context():
+        db.session.add(
+            TrainingMetricPoint(
+                training_job_id=job_id,
+                step=0,
+                epoch=0.5,
+                training_step=10,
+                metric_name="loss",
+                metric_group="train",
+                value=0.7,
+            )
+        )
+        db.session.commit()
+
+    point = client.get(f"/api/training/{job_id}/metrics", headers=auth_headers).get_json()["points"][0]
+    assert (point["group"], point["training_step"], point["step"]) == ("train", 10, 0)
+
+
+def test_points_stored_before_groups_existed_get_a_group_from_their_name(client, auth_headers, app):
+    _, job_id = _make_model_and_job(app)
+
+    with app.app_context():
+        for i, name in enumerate(["eval_accuracy", "training_done", "loss", "grad_norm"]):
+            db.session.add(
+                TrainingMetricPoint(training_job_id=job_id, step=i, metric_name=name, value=1.0)
+            )
+        db.session.commit()
+
+    points = client.get(f"/api/training/{job_id}/metrics", headers=auth_headers).get_json()["points"]
+    assert [(p["metric_name"], p["group"], p["training_step"]) for p in points] == [
+        ("eval_accuracy", "eval", None),
+        ("training_done", "stage", None),
+        ("loss", "train", None),
+        ("grad_norm", "train", None),
+    ]
+
+
 def test_stop_training(client, auth_headers, app):
     _, job_id = _make_model_and_job(app)
 
