@@ -183,3 +183,21 @@ def test_groupings_have_no_labels_to_score_so_they_train_as_before(fake_redis, c
         trainer.train_topic_modeling(texts, model_type, parameters)
 
     assert logger.points == []
+
+
+def test_a_part_the_algorithm_cannot_fit_is_left_out_of_the_curve(fake_redis, classification_df, monkeypatch):
+    from sklearn.naive_bayes import MultinomialNB
+
+    real_fit = MultinomialNB.fit
+
+    def refuse_small_parts(self, X, y, *args, **kwargs):
+        if X.shape[0] < 10:
+            raise ValueError("too few rows")
+        return real_fit(self, X, y, *args, **kwargs)
+
+    monkeypatch.setattr(MultinomialNB, "fit", refuse_small_parts)
+
+    points, metrics = _train(fake_redis, classification_df, "naive_bayes", {"learning_curve": True})
+
+    assert [size for size, _ in _curve(points, "learning_curve_eval_accuracy")] == [16, 24, 32]
+    assert 0.0 <= metrics["accuracy"] <= 1.0

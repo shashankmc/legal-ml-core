@@ -9,9 +9,9 @@ from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.decomposition import NMF, LatentDirichletAllocation
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_distances
-from sklearn.exceptions import ConvergenceWarning
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -321,8 +321,9 @@ class MLModelTrainer:
         """Fits a copy of the estimator on growing parts of the training split
         and scores it on that part (`train`) and on the evaluation split (`eval`).
         Each point's training_step is the part's size. The split is already
-        shuffled, so a part is its first rows; a part with one label cannot be
-        fitted and is left out. Stop is honoured between fits."""
+        shuffled, so a part is its first rows. A part the algorithm cannot fit,
+        one with a single label say, is left out: the curve never fails the run.
+        Stop is honoured between fits."""
         n_rows = X_train.shape[0]
         sizes = sorted({max(1, round(fraction * n_rows)) for fraction in LEARNING_CURVE_FRACTIONS})
         for size in sizes:
@@ -330,7 +331,10 @@ class MLModelTrainer:
             X_part, y_part = X_train[:size], y_train[:size]
             if len(np.unique(y_part)) < 2:
                 continue
-            fitted = clone(estimator).fit(X_part, y_part)
+            try:
+                fitted = clone(estimator).fit(X_part, y_part)
+            except ValueError:
+                continue
             for group, X, y in (("train", X_part, y_part), ("eval", X_test, y_test)):
                 self.metric_logger.log(
                     metric_name=f"learning_curve_{group}_accuracy",
