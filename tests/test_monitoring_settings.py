@@ -41,7 +41,7 @@ def dataset_id(app, tmp_path):
         ({"include": "eval_*"}, "monitoring.include", "Metrics to keep must be a list of names."),
         ({"exclude": [3]}, "monitoring.exclude", "Metrics to drop must be a list of names."),
         ({"learning_curve": "yes"}, "monitoring.learning_curve", "Learning curve must be true or false."),
-        ({"system_metrics": 1}, "monitoring.system_metrics", "Resource readings must be true or false."),
+        ({"system_metrics": 1}, "monitoring.system_metrics", "Record resource use must be true or false."),
         ({"flush_every_points": 0}, "monitoring.flush_every_points", "Points per write must be a whole number above 0."),
         ({"flush_every_points": 1.5}, "monitoring.flush_every_points", "Points per write must be a whole number above 0."),
         ({"flush_every_seconds": 0}, "monitoring.flush_every_seconds", "Seconds between writes must be a number above 0."),

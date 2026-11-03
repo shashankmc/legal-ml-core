@@ -55,7 +55,7 @@ MONITORING_FIELDS = {
     # Classical classifiers' learning curves, opt-in as they slow training (BAIGLE #93).
     "learning_curve": {"label": "Learning curve", "default": False, "check": _true_or_false},
     # Memory, GPU, speed and time left, as system points (system_metrics.py).
-    "system_metrics": {"label": "Resource readings", "default": False, "check": _true_or_false},
+    "system_metrics": {"label": "Record resource use", "default": False, "check": _true_or_false},
     # How the worker batches metric point writes (BAIGLE #92): once this many
     # are waiting, or the oldest has waited this long.
     "flush_every_points": {"label": "Points per write", "default": 50, "check": _whole_number_above_zero},
