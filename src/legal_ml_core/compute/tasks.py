@@ -47,10 +47,13 @@ class MetricLogger:
         self._flush_every_seconds = flush_every_seconds
         self._clock = clock
         self._buffer = []
+        self._oldest_buffered_at = None
 
     def log(self, metric_name, value, epoch=None, training_step=None, group=None):
         step = self._counter
         self._counter += 1
+        if not self._buffer:
+            self._oldest_buffered_at = self._clock()
         self._buffer.append(
             dict(
                 training_job_id=self.training_job_id,
@@ -62,7 +65,10 @@ class MetricLogger:
                 value=float(value),
             )
         )
-        if len(self._buffer) >= self._flush_every_points:
+        if (
+            len(self._buffer) >= self._flush_every_points
+            or self._clock() - self._oldest_buffered_at >= self._flush_every_seconds
+        ):
             self.flush()
         return step
 

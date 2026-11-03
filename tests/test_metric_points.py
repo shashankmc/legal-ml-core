@@ -177,3 +177,18 @@ def test_points_are_written_once_the_batch_is_full(app):
 
         logger.log("loss", 0.7)
         assert [p.step for p in _points(job_id)] == [0, 1, 2]
+
+
+def test_points_are_written_once_the_oldest_has_waited_long_enough(app):
+    job_id = _make_job(app)
+    with app.app_context():
+        clock = _Clock()
+        logger = MetricLogger(job_id, flush_every_points=100, flush_every_seconds=2, clock=clock)
+        logger.log("loss", 0.9)
+        clock.now = 1.5
+        logger.log("loss", 0.8)
+        assert _points(job_id) == []
+
+        clock.now = 2.0
+        logger.log("loss", 0.7)
+        assert [p.step for p in _points(job_id)] == [0, 1, 2]
