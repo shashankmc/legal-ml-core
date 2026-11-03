@@ -194,3 +194,15 @@ def test_a_part_the_algorithm_cannot_fit_is_left_out_of_the_curve(fake_redis, cl
 
     assert [size for size, _ in _curve(points, "learning_curve_eval_accuracy")] == [16, 24, 32]
     assert 0.0 <= metrics["accuracy"] <= 1.0
+
+
+def test_the_catalogue_says_which_algorithms_record_a_learning_curve(client, auth_headers):
+    catalogue = client.get("/api/models/available", headers=auth_headers).get_json()["models"]
+
+    supported = {
+        model_type
+        for models in catalogue.values()
+        for model_type, info in models.items()
+        if info["supports_learning_curve"]
+    }
+    assert supported == set(CLASSIFIERS)

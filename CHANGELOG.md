@@ -16,6 +16,8 @@ While the version is 0.x, minor releases may contain breaking changes.
   sizes, the size as `training_step`. Logistic regression also stores `loss` and
   `eval_loss` by iteration, the iteration as `training_step`. It makes training
   slower, so it stays off by default, and a Stop is honoured between fits.
+  Each model type in `GET /api/models/available` says whether it can, as
+  `supports_learning_curve`.
 
 - Each run can set its own monitoring under `parameters.monitoring`:
   `log_every_n_steps`, `eval_strategy` (`epoch` or `steps`) with `eval_steps`, and

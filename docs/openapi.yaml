@@ -270,7 +270,9 @@ paths:
             and their options or min and max, and
             optional rules: when `when` holds, `parameter` is limited to
             `options`, and `reason` says why. `multiclass` in `when` means a
-            Dataset of more than two labels.
+            Dataset of more than two labels. `supports_learning_curve` says whether a
+            run of the model type can record a learning curve
+            (`monitoring.learning_curve`).
           content:
             application/json:
               schema:

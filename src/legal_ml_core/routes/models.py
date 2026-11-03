@@ -518,6 +518,14 @@ AVAILABLE_MODELS = {
 }
 
 
+# Whether a run can record a learning curve (`monitoring.learning_curve`,
+# BAIGLE #93): MLModelTrainer.train_classification_model records one for the
+# classical classifiers. Fine-tuning draws its own curves, and the groupings
+# have no labels to score.
+for _category, _models in AVAILABLE_MODELS.items():
+    for _info in _models.values():
+        _info["supports_learning_curve"] = _category == "classification"
+
 # Dataset task types whose training is not implemented in the worker yet. Kept
 # explicit so uploads/selection can explain the limitation instead of failing
 # silently at training time.
