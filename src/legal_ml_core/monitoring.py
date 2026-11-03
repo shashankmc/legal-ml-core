@@ -55,7 +55,7 @@ MONITORING_FIELDS = {
     # Classical classifiers' learning curves, opt-in as they slow training (BAIGLE #93).
     "learning_curve": {"label": "Learning curve", "default": False, "check": _true_or_false},
     # Memory, GPU, speed and time left, as system points (system_metrics.py).
-    "system_metrics": {"label": "Resource readings", "default": False, "check": _true_or_false},
+    "system_metrics": {"label": "Record resource use", "default": False, "check": _true_or_false},
     # How the worker batches metric point writes (BAIGLE #92): once this many
     # are waiting, or the oldest has waited this long.
     "flush_every_points": {"label": "Points per write", "default": 50, "check": _whole_number_above_zero},
@@ -85,6 +85,12 @@ def effective_monitoring(host=None, run=None):
     return deepcopy(defaults | dict(host or {}) | dict(run or {}))
 
 
+def run_monitoring(config, parameters):
+    """The settings a Model's run uses: the host's `LEGAL_ML_MONITORING`, then
+    the Model's own `parameters.monitoring`. Worked out once per run."""
+    return effective_monitoring(config.get("LEGAL_ML_MONITORING"), (parameters or {}).get("monitoring"))
+
+
 def validate_host_monitoring(config):
     """Fail at start, not on a user's first run, on a bad `LEGAL_ML_MONITORING`."""
     refusal = monitoring_refusal(config.get("LEGAL_ML_MONITORING", {}))
@@ -101,7 +107,7 @@ def keeps_point(monitoring, metric_name):
     return included and not any(fnmatchcase(metric_name, glob) for glob in monitoring["exclude"])
 
 
-class KeptPoints:
+class FilteredMetricLogger:
     """A metric logger that passes on only the points the run keeps. Anything
     else, a flush say, goes straight to the logger it wraps."""
 

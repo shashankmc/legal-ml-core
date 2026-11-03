@@ -123,6 +123,12 @@ class TrainingCancelCallback(TrainerCallback):
         return control
 
 
+def _monitoring(parameters):
+    """The run's monitoring settings. The worker works them out once per run and
+    passes them in; a direct caller that passes none gets the defaults."""
+    return parameters.get("monitoring") or effective_monitoring()
+
+
 # The parts of the training split a learning curve fits on (BAIGLE #93).
 LEARNING_CURVE_FRACTIONS = (0.1, 0.25, 0.5, 0.75, 1.0)
 # At most this many loss points, spread from the first iteration to max_iter.
@@ -283,12 +289,12 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported model type: {model_type}")
 
         # Opt-in, as it fits the algorithm several times more (BAIGLE #93).
-        if self.metric_logger and effective_monitoring(run=parameters.get("monitoring"))["learning_curve"]:
+        if self.metric_logger and _monitoring(parameters)["learning_curve"]:
             self._log_learning_curve(self.model, X_train, y_train, X_test, y_test)
             self._log_loss_by_iteration(self.model, X_train, y_train, X_test, y_test)
 
         # Train model
-        self.model.fit(X_train, y_train)
+        self._timed_fit(lambda: self.model.fit(X_train, y_train), X_train.shape[0], parameters)
 
         # Calibrate probabilities on a held-out split so displayed confidence is
         # closer to a true probability. Not all classifiers expose probabilities
@@ -346,6 +352,18 @@ class MLModelTrainer:
         )
 
         return metrics
+
+    def _timed_fit(self, fit, n_samples, parameters):
+        """Fits the model the run keeps. With resource readings on, logs how
+        many samples a second that fit alone took (BAIGLE #94): not the
+        vectorising, the evaluation or a learning curve's extra fits.
+        Fine-tuning reports its own speed as it goes."""
+        started = time.monotonic()
+        result = fit()
+        seconds = time.monotonic() - started
+        if self.metric_logger and _monitoring(parameters)["system_metrics"] and seconds > 0:
+            self.metric_logger.log("samples_per_second", n_samples / seconds, group="system")
+        return result
 
     def _stop_if_requested(self):
         if self.cancel_check and self.cancel_check():
@@ -451,7 +469,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported clustering model type: {model_type}")
 
         # Train model
-        labels = self.model.fit_predict(points)
+        labels = self._timed_fit(lambda: self.model.fit_predict(points), X.shape[0], parameters)
 
         # Store clustering data for visualization
         embeddings = X.toarray()
@@ -519,7 +537,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported topic modeling type: {model_type}")
 
         # Train model
-        self.model.fit(X)
+        self._timed_fit(lambda: self.model.fit(X), X.shape[0], parameters)
         if not self.model.components_.any():
             raise ValueError(
                 "The regularisation (alpha) removed every topic on this Dataset. Choose a smaller alpha."
@@ -611,7 +629,7 @@ class MLModelTrainer:
             "output_dir", f"/tmp/transformer_{parameters['model_id']}"
         )
         # How often the run logs and evaluates (BAIGLE #89).
-        monitoring = effective_monitoring(run=parameters.get("monitoring"))
+        monitoring = _monitoring(parameters)
         evaluation = {"eval_strategy": monitoring["eval_strategy"]}
         if monitoring["eval_strategy"] == "steps":
             evaluation["eval_steps"] = monitoring["eval_steps"]

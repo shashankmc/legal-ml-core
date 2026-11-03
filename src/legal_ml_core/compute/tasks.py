@@ -15,7 +15,7 @@ from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from ..metric_groups import metric_group_for
 from ..models import Dataset, Model, TrainingJob, TrainingMetricPoint
-from ..monitoring import KeptPoints, effective_monitoring
+from ..monitoring import FilteredMetricLogger, run_monitoring
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
@@ -182,19 +182,17 @@ def _monitoring(task_info):
     monitoring settings existed gets this worker's defaults."""
     if task_info.get("monitoring"):
         return task_info["monitoring"]
-    return effective_monitoring(
-        current_app.config.get("LEGAL_ML_MONITORING"), (task_info.get("parameters") or {}).get("monitoring")
-    )
+    return run_monitoring(current_app.config, task_info.get("parameters"))
 
 
-def _chosen_parameters(task_info):
+def _chosen_parameters(task_info, monitoring):
     """The flat parameters the trainer reads: the Model's choices, nested under
     "parameters" in the queue message. The server's own values go last, so a
     stored parameter can never replace them."""
     parameters = dict(task_info.get("parameters") or {})
     parameters.setdefault("random_state", task_info.get("random_state", 42))
     parameters["model_id"] = task_info["model_id"]
-    parameters["monitoring"] = _monitoring(task_info)
+    parameters["monitoring"] = monitoring
     return parameters
 
 
@@ -222,7 +220,7 @@ def process_training_task(
     job_id = task_info["job_id"]
     model_id = task_info["model_id"]
     monitoring = _monitoring(task_info)
-    metric_logger = KeptPoints(
+    metric_logger = FilteredMetricLogger(
         MetricLogger(
             job_id,
             flush_every_points=monitoring["flush_every_points"],
@@ -300,8 +298,7 @@ def process_training_task(
         reached("training_started")
 
         # Train model based on task type
-        parameters = _chosen_parameters(task_info)
-        fit_started = time.monotonic()
+        parameters = _chosen_parameters(task_info, monitoring)
         if task_info["model_type"] in ["legalbert", "roberta"]:
             parameters["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
@@ -334,11 +331,6 @@ def process_training_task(
 
         set_live({"status": "running", "progress": 75})
         reached("training_done")
-        # Fine-tuning reports its own speed as it goes; a classical fit is one call.
-        if monitoring.get("system_metrics") and task_info["model_type"] not in ["legalbert", "roberta"]:
-            fit_seconds = time.monotonic() - fit_started
-            if fit_seconds > 0:
-                metric_logger.log("samples_per_second", len(texts) / fit_seconds, group="system")
 
         # Save model
         model_path = get_storage_backend().get_model_path(model_storage_path, model_id)

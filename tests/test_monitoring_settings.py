@@ -10,6 +10,7 @@ from legal_ml_core.compute.tasks import MetricLogger, process_training_task
 from legal_ml_core.compute.trainer import MLModelTrainer
 from legal_ml_core.monitoring import effective_monitoring
 from tests.conftest import TEST_USER_ID
+from tests.monitoring_helpers import create_model, run_classical, start_run
 from tests.test_adjust_and_retrain import _name_groups, _retrain
 from tests.test_training_cancel import stub_hf  # noqa: F401
 from tests.test_training_parameters import _run, clustering  # noqa: F401
@@ -27,14 +28,6 @@ def dataset_id(app, tmp_path):
     return dataset.id
 
 
-def _create(client, auth_headers, dataset_id, monitoring, model_type="logistic_regression"):
-    return client.post(
-        "/api/models/",
-        json={"name": "M", "dataset_id": dataset_id, "model_type": model_type, "parameters": {"monitoring": monitoring}},
-        headers=auth_headers,
-    )
-
-
 @pytest.mark.parametrize(
     "monitoring, field, says",
     [
@@ -48,7 +41,7 @@ def _create(client, auth_headers, dataset_id, monitoring, model_type="logistic_r
         ({"include": "eval_*"}, "monitoring.include", "Metrics to keep must be a list of names."),
         ({"exclude": [3]}, "monitoring.exclude", "Metrics to drop must be a list of names."),
         ({"learning_curve": "yes"}, "monitoring.learning_curve", "Learning curve must be true or false."),
-        ({"system_metrics": 1}, "monitoring.system_metrics", "Resource readings must be true or false."),
+        ({"system_metrics": 1}, "monitoring.system_metrics", "Record resource use must be true or false."),
         ({"flush_every_points": 0}, "monitoring.flush_every_points", "Points per write must be a whole number above 0."),
         ({"flush_every_points": 1.5}, "monitoring.flush_every_points", "Points per write must be a whole number above 0."),
         ({"flush_every_seconds": 0}, "monitoring.flush_every_seconds", "Seconds between writes must be a number above 0."),
@@ -58,14 +51,14 @@ def _create(client, auth_headers, dataset_id, monitoring, model_type="logistic_r
     ],
 )
 def test_bad_monitoring_settings_are_refused_naming_the_field(client, auth_headers, dataset_id, monitoring, field, says):
-    response = _create(client, auth_headers, dataset_id, monitoring)
+    response = create_model(client, auth_headers, dataset_id, monitoring)
 
     assert response.status_code == 400
     assert response.get_json() == {"error": says, "field": field}
 
 
 def test_an_edit_to_bad_monitoring_settings_is_refused_too(client, auth_headers, dataset_id):
-    model_id = _create(client, auth_headers, dataset_id, {}).get_json()["model"]["id"]
+    model_id = create_model(client, auth_headers, dataset_id, {}).get_json()["model"]["id"]
 
     response = client.put(
         f"/api/models/{model_id}", json={"parameters": {"monitoring": {"eval_strategy": "never"}}}, headers=auth_headers
@@ -88,22 +81,13 @@ DEFAULT_MONITORING = {
 }
 
 
-def _start(client, auth_headers, dataset_id, monitoring):
-    created = _create(client, auth_headers, dataset_id, monitoring)
-    assert created.status_code == 201, created.get_json()
-    model_id = created.get_json()["model"]["id"]
-    started = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
-    assert started.status_code == 200, started.get_json()
-    return model_id
-
-
 def _recorded(client, auth_headers, model_id):
     runs = client.get(f"/api/models/{model_id}/runs", headers=auth_headers).get_json()["runs"]
     return runs[0]["parameters"]["monitoring"]
 
 
 def test_a_run_with_no_monitoring_settings_records_the_defaults(client, auth_headers, dataset_id):
-    model_id = _start(client, auth_headers, dataset_id, {})
+    model_id = start_run(client, auth_headers, dataset_id, {})
 
     assert _recorded(client, auth_headers, model_id) == DEFAULT_MONITORING
 
@@ -111,7 +95,7 @@ def test_a_run_with_no_monitoring_settings_records_the_defaults(client, auth_hea
 def test_the_host_sets_the_defaults_and_a_run_overrides_them(app, client, auth_headers, dataset_id):
     app.config["LEGAL_ML_MONITORING"] = {"log_every_n_steps": 50, "exclude": ["learning_rate"]}
 
-    model_id = _start(client, auth_headers, dataset_id, {"log_every_n_steps": 5, "eval_strategy": "steps"})
+    model_id = start_run(client, auth_headers, dataset_id, {"log_every_n_steps": 5, "eval_strategy": "steps"})
 
     assert _recorded(client, auth_headers, model_id) == DEFAULT_MONITORING | {
         "log_every_n_steps": 5,
@@ -168,18 +152,14 @@ def _stored(job_id):
     return [p.metric_name for p in points]
 
 
-def _run_classical(client, auth_headers, app, fake_redis, dataset_id, monitoring, trainer):
-    _start(client, auth_headers, dataset_id, monitoring)
-    task = json.loads(fake_redis.rpop("training_queue"))
-    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=trainer)
-    assert db.session.get(TrainingJob, task["job_id"]).status == "completed"
-    return _stored(task["job_id"])
+def _names_stored(*args):
+    return [p["metric_name"] for p in run_classical(*args)]
 
 
 def test_a_classical_run_stores_only_the_points_its_globs_keep(client, auth_headers, app, fake_redis, dataset_id):
     trainer = _reporting_trainer("loss", "learning_rate", "eval_accuracy", "eval_loss")
 
-    stored = _run_classical(
+    stored = _names_stored(
         client, auth_headers, app, fake_redis, dataset_id, {"include": ["loss", "eval_*"], "exclude": ["eval_loss"]}, trainer
     )
 
@@ -187,7 +167,7 @@ def test_a_classical_run_stores_only_the_points_its_globs_keep(client, auth_head
 
 
 def test_the_stages_are_kept_even_when_every_metric_is_dropped(client, auth_headers, app, fake_redis, dataset_id):
-    stored = _run_classical(
+    stored = _names_stored(
         client, auth_headers, app, fake_redis, dataset_id, {"exclude": ["*"]}, _reporting_trainer("loss")
     )
 
@@ -195,14 +175,14 @@ def test_the_stages_are_kept_even_when_every_metric_is_dropped(client, auth_head
 
 
 def test_a_run_keeps_every_point_by_default(client, auth_headers, app, fake_redis, dataset_id):
-    stored = _run_classical(client, auth_headers, app, fake_redis, dataset_id, {}, _reporting_trainer("loss", "eval_f1"))
+    stored = _names_stored(client, auth_headers, app, fake_redis, dataset_id, {}, _reporting_trainer("loss", "eval_f1"))
 
     assert stored == STAGES[:3] + ["loss", "eval_f1"] + STAGES[3:]
 
 
 def test_a_fine_tuning_run_stores_only_the_points_its_globs_keep(app, dataset_id):
     from legal_ml_core.compute.trainer import TrainingMetricCallback
-    from legal_ml_core.monitoring import KeptPoints
+    from legal_ml_core.monitoring import FilteredMetricLogger
 
     model = Model(owner_id=TEST_USER_ID, dataset_id=dataset_id, name="M", model_type="legalbert", parameters={})
     db.session.add(model)
@@ -211,7 +191,7 @@ def test_a_fine_tuning_run_stores_only_the_points_its_globs_keep(app, dataset_id
     db.session.add(job)
     db.session.commit()
     monitoring = effective_monitoring(run={"exclude": ["learning_rate", "grad_norm"]})
-    kept = KeptPoints(MetricLogger(job.id), monitoring)
+    kept = FilteredMetricLogger(MetricLogger(job.id), monitoring)
     callback = TrainingMetricCallback(kept)
 
     state = SimpleNamespace(epoch=0.5, global_step=10)
@@ -250,7 +230,7 @@ def test_fine_tuning_evaluates_each_epoch_by_default(stub_hf, tmp_path):
 
 def test_the_trainer_gets_the_monitoring_the_run_recorded(app, client, auth_headers, fake_redis, dataset_id):
     app.config["LEGAL_ML_MONITORING"] = {"log_every_n_steps": 50}
-    model_id = _start(client, auth_headers, dataset_id, {"eval_strategy": "steps"})
+    model_id = start_run(client, auth_headers, dataset_id, {"eval_strategy": "steps"})
     seen = {}
 
     class Watching(MLModelTrainer):
@@ -266,7 +246,7 @@ def test_the_trainer_gets_the_monitoring_the_run_recorded(app, client, auth_head
 
 
 def test_a_fractional_number_of_seconds_between_writes_is_accepted(client, auth_headers, dataset_id):
-    model_id = _start(client, auth_headers, dataset_id, {"flush_every_seconds": 0.5})
+    model_id = start_run(client, auth_headers, dataset_id, {"flush_every_seconds": 0.5})
 
     assert _recorded(client, auth_headers, model_id)["flush_every_seconds"] == 0.5
 
@@ -277,7 +257,7 @@ def test_the_metric_points_are_written_as_often_as_the_run_says(
     from legal_ml_core.compute import tasks
 
     app.config["LEGAL_ML_MONITORING"] = {"flush_every_seconds": 10}
-    _start(client, auth_headers, dataset_id, {"flush_every_points": 7})
+    start_run(client, auth_headers, dataset_id, {"flush_every_points": 7})
     made = []
 
     class Recording(MetricLogger):

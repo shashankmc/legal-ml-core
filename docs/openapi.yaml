@@ -270,7 +270,9 @@ paths:
             and their options or min and max, and
             optional rules: when `when` holds, `parameter` is limited to
             `options`, and `reason` says why. `multiclass` in `when` means a
-            Dataset of more than two labels.
+            Dataset of more than two labels. `supports_learning_curve` says whether a
+            run of the model type can record a learning curve
+            (`monitoring.learning_curve`).
           content:
             application/json:
               schema:
@@ -1733,6 +1735,20 @@ components:
             Which chart the point belongs on. Older points without one
             get one from their name: `eval_*` is eval, the run's milestones
             are stage, and the rest are train.
+        x_kind:
+          type: string
+          enum: [step, iteration, training_examples]
+          description: >-
+            What `training_step` counts, for the x-axis title: the trainer's
+            steps, logistic regression's iterations (loss by iteration), or
+            training examples (`learning_curve_*` points). Worked out from the
+            stored point, so older points have one too.
+        unit:
+          type: [string, "null"]
+          description: >-
+            A system point's unit, from the end of its name: `MB` (`*_mb`), `%`
+            (`*_percent`), `samples/s` (`samples_per_second`) or `s`
+            (`seconds_remaining`). Null for every other point.
         value: { type: number }
         created_at: { type: string, format: date-time }
     ModelComparison:

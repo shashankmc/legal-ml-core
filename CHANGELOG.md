@@ -16,6 +16,8 @@ While the version is 0.x, minor releases may contain breaking changes.
   sizes, the size as `training_step`. Logistic regression also stores `loss` and
   `eval_loss` by iteration, the iteration as `training_step`. It makes training
   slower, so it stays off by default, and a Stop is honoured between fits.
+  Each model type in `GET /api/models/available` says whether it can, as
+  `supports_learning_curve`.
 
 - Each run can set its own monitoring under `parameters.monitoring`:
   `log_every_n_steps`, `eval_strategy` (`epoch` or `steps`) with `eval_steps`, and
@@ -34,8 +36,16 @@ While the version is 0.x, minor releases may contain breaking changes.
   readings as `system` points: `memory_mb`, `gpu_memory_mb` and `gpu_use_percent`
   (only when CUDA is available), `samples_per_second` and, when fine-tuning,
   `seconds_remaining`. Fine-tuning takes them every `log_every_n_steps`; a
-  classical run takes them at each stage. Off by default. No new dependency:
+  classical run takes them at each stage, and times its speed over the fit of
+  the model it keeps, in training rows a second, so a learning curve's extra fits
+  do not slow it. Off by default. No new dependency:
   memory comes from psutil when it is installed, else from the standard library.
+
+- Each metric point says what it means: `x_kind` is what its `training_step`
+  counts (`step`, `iteration` or `training_examples`), and `unit` is a system
+  point's unit (`MB`, `%`, `samples/s` or `s`, null for other points). Both are
+  worked out from the stored point, so older points have them too and no
+  migration is needed.
 
 - Each training job records `parameters`, the Model's settings when the run
   started, so retraining no longer loses what an earlier run used. Jobs from
