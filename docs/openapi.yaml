@@ -1709,7 +1709,7 @@ components:
           default: ["*"]
           description: Name globs; a point is stored when it matches one and no exclude. Stage markers are always stored.
         exclude: { type: array, items: { type: string }, default: [], description: Name globs of points not to store. }
-        learning_curve: { type: boolean, default: false, description: Accepted, not yet used. }
+        learning_curve: { type: boolean, default: false, description: "Classical Text Classification algorithms also store learning_curve_* points against training-set size, and logistic regression its loss by iteration. Makes training slower." }
         system_metrics: { type: boolean, default: false, description: Accepted, not yet used. }
         flush_every_points: { type: integer, minimum: 1, default: 50, description: The worker writes waiting metric points once this many are waiting. }
         flush_every_seconds: { type: number, exclusiveMinimum: 0, default: 2.0, description: The worker writes waiting metric points once the oldest has waited this many seconds. }
@@ -1724,7 +1724,7 @@ components:
         epoch: { type: [number, "null"] }
         training_step:
           type: [integer, "null"]
-          description: The trainer's own step (fine-tuning only).
+          description: The trainer's own step for fine-tuning, the iteration for loss by iteration, and the training-set size for `learning_curve_*` points.
         metric_name: { type: string }
         group:
           type: string

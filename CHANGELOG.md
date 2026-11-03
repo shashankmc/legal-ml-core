@@ -10,12 +10,19 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ### Added
 
+- With `monitoring.learning_curve` on, a classical Text Classification run also
+  stores a learning curve: `learning_curve_train_accuracy` (group `train`) and
+  `learning_curve_eval_accuracy` (group `eval`) at five growing training-set
+  sizes, the size as `training_step`. Logistic regression also stores `loss` and
+  `eval_loss` by iteration, the iteration as `training_step`. It makes training
+  slower, so it stays off by default, and a Stop is honoured between fits.
+
 - Each run can set its own monitoring under `parameters.monitoring`:
   `log_every_n_steps`, `eval_strategy` (`epoch` or `steps`) with `eval_steps`, and
   `include` / `exclude` name globs for which metric points are stored (stage markers
   always are), and `flush_every_points` (50) / `flush_every_seconds` (2.0) for how
-  often the worker writes metric points in a batch. `learning_curve` and
-  `system_metrics` are accepted but not used yet.
+  often the worker writes metric points in a batch, `learning_curve` and
+  `system_metrics` (accepted but not used yet).
   The host sets the defaults in `LEGAL_ML_MONITORING`, and a bad default stops
   `init_ml_feature`. A bad setting is refused with a 400 whose `field` is
   `monitoring.<setting>`. Fine-tuning used to log every 10 steps and evaluate each

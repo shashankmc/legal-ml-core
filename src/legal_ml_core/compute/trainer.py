@@ -1,12 +1,15 @@
 import json
+import warnings
 
 import joblib
 import numpy as np
+from sklearn.base import clone
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.decomposition import NMF, LatentDirichletAllocation
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_distances
 from sklearn.metrics import (
@@ -14,6 +17,7 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     f1_score,
+    log_loss,
     precision_score,
     recall_score,
     silhouette_score,
@@ -38,7 +42,8 @@ class TrainingMetricCallback(TrainerCallback):
     LegalBERT/RoBERTa path genuine per-step training curves (loss, eval_accuracy,
     etc.) — unlike the classical sklearn algorithms below, which fit synchronously
     with no epoch loop and only get coarse phase markers (logged by the caller in
-    legal_ml_core.compute.tasks, not here).
+    legal_ml_core.compute.tasks, not here), plus a learning curve when the run
+    asks for one.
     """
 
     def __init__(self, metric_logger):
@@ -82,6 +87,12 @@ class TrainingCancelCallback(TrainerCallback):
             self.cancelled = True
             control.should_training_stop = True
         return control
+
+
+# The parts of the training split a learning curve fits on (BAIGLE #93).
+LEARNING_CURVE_FRACTIONS = (0.1, 0.25, 0.5, 0.75, 1.0)
+# At most this many loss points, spread from the first iteration to max_iter.
+LOSS_POINTS = 12
 
 
 class MLModelTrainer:
@@ -237,6 +248,11 @@ class MLModelTrainer:
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
 
+        # Opt-in, as it fits the algorithm several times more (BAIGLE #93).
+        if self.metric_logger and effective_monitoring(run=parameters.get("monitoring"))["learning_curve"]:
+            self._log_learning_curve(self.model, X_train, y_train, X_test, y_test)
+            self._log_loss_by_iteration(self.model, X_train, y_train, X_test, y_test)
+
         # Train model
         self.model.fit(X_train, y_train)
 
@@ -296,6 +312,63 @@ class MLModelTrainer:
         )
 
         return metrics
+
+    def _stop_if_requested(self):
+        if self.cancel_check and self.cancel_check():
+            raise TrainingCancelled()
+
+    def _log_learning_curve(self, estimator, X_train, y_train, X_test, y_test):
+        """Fits a copy of the estimator on growing parts of the training split
+        and scores it on that part (`train`) and on the evaluation split (`eval`).
+        Each point's training_step is the part's size. The split is already
+        shuffled, so a part is its first rows. A part the algorithm cannot fit,
+        one with a single label say, is left out: the curve never fails the run.
+        Stop is honoured between fits."""
+        n_rows = X_train.shape[0]
+        sizes = sorted({max(1, round(fraction * n_rows)) for fraction in LEARNING_CURVE_FRACTIONS})
+        for size in sizes:
+            self._stop_if_requested()
+            X_part, y_part = X_train[:size], y_train[:size]
+            if len(np.unique(y_part)) < 2:
+                continue
+            try:
+                fitted = clone(estimator).fit(X_part, y_part)
+            except ValueError:
+                continue
+            for group, X, y in (("train", X_part, y_part), ("eval", X_test, y_test)):
+                self.metric_logger.log(
+                    metric_name=f"learning_curve_{group}_accuracy",
+                    value=accuracy_score(y, fitted.predict(X)),
+                    training_step=size,
+                    group=group,
+                )
+
+    def _log_loss_by_iteration(self, estimator, X_train, y_train, X_test, y_test):
+        """For an algorithm that learns over iterations (logistic regression),
+        the loss on the training and evaluation splits after a growing number
+        of them. scikit-learn keeps no history, so each point is a fresh fit
+        stopped after that many iterations, which is the same path the real fit
+        takes. Stops early once a fit converges, and between fits on a Stop."""
+        # SVC's max_iter is -1, for no limit; it learns in one solve.
+        max_iter = getattr(estimator, "max_iter", None)
+        if not isinstance(max_iter, int) or max_iter < 1 or not hasattr(estimator, "predict_proba"):
+            return
+        iterations = np.unique(np.geomspace(1, max_iter, LOSS_POINTS).round().astype(int))
+        for iteration in iterations:
+            self._stop_if_requested()
+            with warnings.catch_warnings():
+                # Stopping before convergence is the point.
+                warnings.simplefilter("ignore", ConvergenceWarning)
+                fitted = clone(estimator).set_params(max_iter=int(iteration)).fit(X_train, y_train)
+            for group, name, X, y in (("train", "loss", X_train, y_train), ("eval", "eval_loss", X_test, y_test)):
+                self.metric_logger.log(
+                    metric_name=name,
+                    value=log_loss(y, fitted.predict_proba(X), labels=fitted.classes_),
+                    training_step=int(iteration),
+                    group=group,
+                )
+            if np.max(fitted.n_iter_) < iteration:
+                return
 
     def train_clustering_model(self, texts, model_type, parameters):
         # Create vectorizer

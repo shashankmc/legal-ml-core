@@ -117,6 +117,8 @@ classification report, or clustering/topic outputs) are stored as JSON in
 `TrainingMetricPoint` (`GET /api/training/<job_id>/metrics`). Each point has a
 `group` (`train`, `eval`, `system` or `stage`); fine-tuning points also have
 `training_step`, the trainer's own step, while `step` is only the polling cursor.
+Learning-curve points (`learning_curve_*`, with `monitoring.learning_curve` on)
+carry the training-set size as `training_step`.
 
 ### Export
 
