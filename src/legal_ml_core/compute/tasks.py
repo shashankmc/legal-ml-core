@@ -7,6 +7,7 @@ from datetime import datetime
 import joblib
 import pandas as pd
 import redis as redis_lib
+from flask import current_app
 
 from ..active_learning.scoring import queue_pool_scoring, verify_finished_model
 from ..annotation_queue import apply_saved_annotations
@@ -14,6 +15,7 @@ from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from ..metric_groups import metric_group_for
 from ..models import Dataset, Model, TrainingJob, TrainingMetricPoint
+from ..monitoring import KeptPoints, effective_monitoring
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
@@ -142,7 +144,7 @@ def _with_kept_group_names(model, job_id, metrics):
     of only some settings matches the form's full copy of the same choices. A
     run from before snapshots has no record of its settings, and the Model may
     have been edited since, so its names are dropped too: names on the wrong
-    groups are worse than lost names."""
+    groups are worse than lost names. Monitoring settings do not count."""
     # Here, not at the top: routes.models imports the training code's siblings.
     from ..routes.models import effective_parameters
 
@@ -161,11 +163,27 @@ def _with_kept_group_names(model, job_id, metrics):
     )
     if job is None or previous is None or previous.parameters is None:
         return metrics
-    if effective_parameters(model.model_type, job.parameters) != effective_parameters(
-        model.model_type, previous.parameters
+    if _learning_settings(effective_parameters(model.model_type, job.parameters)) != _learning_settings(
+        effective_parameters(model.model_type, previous.parameters)
     ):
         return metrics
     return {**metrics, "display_labels": names}
+
+
+def _learning_settings(parameters):
+    """The settings that change what a run learns. Monitoring only changes what
+    is watched, and runs from before it was recorded have none."""
+    return {name: value for name, value in parameters.items() if name != "monitoring"}
+
+
+def _monitoring(task_info):
+    """The run's monitoring, as the API recorded it. A message queued before
+    monitoring settings existed gets this worker's defaults."""
+    if task_info.get("monitoring"):
+        return task_info["monitoring"]
+    return effective_monitoring(
+        current_app.config.get("LEGAL_ML_MONITORING"), (task_info.get("parameters") or {}).get("monitoring")
+    )
 
 
 def _chosen_parameters(task_info):
@@ -175,6 +193,7 @@ def _chosen_parameters(task_info):
     parameters = dict(task_info.get("parameters") or {})
     parameters.setdefault("random_state", task_info.get("random_state", 42))
     parameters["model_id"] = task_info["model_id"]
+    parameters["monitoring"] = _monitoring(task_info)
     return parameters
 
 
@@ -201,7 +220,8 @@ def process_training_task(
     """
     job_id = task_info["job_id"]
     model_id = task_info["model_id"]
-    metric_logger = MetricLogger(job_id)
+    monitoring = _monitoring(task_info)
+    metric_logger = KeptPoints(MetricLogger(job_id), monitoring)
 
     def cancel_requested():
         """Stop check: the Redis flag (cheap, set by /stop), else the DB row,

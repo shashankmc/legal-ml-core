@@ -313,7 +313,11 @@ paths:
                 name: { type: string }
                 dataset_id: { type: string }
                 model_type: { type: string, examples: [svm, random_forest, legalbert, kmeans, lda] }
-                parameters: { type: object }
+                parameters:
+                  type: object
+                  description: The model's settings, by catalogue name, plus an optional `monitoring`.
+                  properties:
+                    monitoring: { $ref: "#/components/schemas/Monitoring" }
                 project_id: { type: string }
       responses:
         "201":
@@ -389,7 +393,11 @@ paths:
               type: object
               properties:
                 name: { type: string }
-                parameters: { type: object }
+                parameters:
+                  type: object
+                  description: The model's settings, by catalogue name, plus an optional `monitoring`.
+                  properties:
+                    monitoring: { $ref: "#/components/schemas/Monitoring" }
       responses:
         "200":
           description: Updated model
@@ -1651,7 +1659,10 @@ components:
         progress: { type: [number, "null"] }
         parameters:
           type: [object, "null"]
-          description: The model's parameters when the run started, catalogue defaults filled in; null for older runs.
+          description: >-
+            The model's parameters when the run started, catalogue defaults filled in; null
+            for older runs. Runs from this release on add `monitoring`, the monitoring the
+            run used, with the host's and the package's defaults filled in.
         metrics: { type: [object, "null"] }
         error_message: { type: [string, "null"] }
         status_message:
@@ -1667,7 +1678,10 @@ components:
         status: { type: string, enum: [pending, running, completed, failed, cancelled] }
         parameters:
           type: [object, "null"]
-          description: The model's parameters when the run started, catalogue defaults filled in; null for older runs.
+          description: >-
+            The model's parameters when the run started, catalogue defaults filled in; null
+            for older runs. Runs from this release on add `monitoring`, the monitoring the
+            run used, with the host's and the package's defaults filled in.
         scores:
           type: object
           description: >-
@@ -1678,6 +1692,25 @@ components:
         created_at: { type: string, format: date-time }
         started_at: { type: [string, "null"], format: date-time }
         completed_at: { type: [string, "null"], format: date-time }
+    Monitoring:
+      type: object
+      additionalProperties: false
+      description: >-
+        How a run is monitored. Each setting left out takes the host's default
+        (`LEGAL_ML_MONITORING`), else the package's. A bad value is refused with a 400
+        whose `field` is `monitoring.<setting>`.
+      properties:
+        log_every_n_steps: { type: integer, minimum: 1, default: 10, description: How often fine-tuning logs, in steps. }
+        eval_strategy: { type: string, enum: [epoch, steps], default: epoch, description: When fine-tuning evaluates. }
+        eval_steps: { type: integer, minimum: 1, default: 100, description: How often fine-tuning evaluates, in steps, when eval_strategy is steps. }
+        include:
+          type: array
+          items: { type: string }
+          default: ["*"]
+          description: Name globs; a point is stored when it matches one and no exclude. Stage markers are always stored.
+        exclude: { type: array, items: { type: string }, default: [], description: Name globs of points not to store. }
+        learning_curve: { type: boolean, default: false, description: Accepted, not yet used. }
+        system_metrics: { type: boolean, default: false, description: Accepted, not yet used. }
     TrainingMetricPoint:
       type: object
       properties:

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from legal_ml_core import Dataset, Model, TrainingJob, db
 from tests.conftest import TEST_USER_ID
+from tests.test_monitoring_settings import DEFAULT_MONITORING
 
 
 def _make_model(app, parameters, owner_id=TEST_USER_ID):
@@ -60,6 +61,7 @@ def test_a_run_records_the_settings_it_started_with_defaults_filled_in(client, a
         "solver": "lbfgs",
         "l1_ratio": 0.5,
         "class_weight": "none",
+        "monitoring": DEFAULT_MONITORING,
     }
     assert run["status"] == "pending"
 

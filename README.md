@@ -258,6 +258,29 @@ own window is `run_ml_worker(liveness=legal_ml_core.liveness.LivenessTimings(sta
 app.config["LEGAL_ML_HEARTBEAT_STALE_SECONDS"] = 120  # default
 ```
 
+## Monitoring settings
+
+Each training run is monitored by the settings under `parameters.monitoring`. A
+setting a run leaves out takes the host's default from `LEGAL_ML_MONITORING`,
+else the package's:
+
+```python
+app.config["LEGAL_ML_MONITORING"] = {
+    "log_every_n_steps": 10,   # how often fine-tuning logs, in steps
+    "eval_strategy": "epoch",  # or "steps", every eval_steps
+    "eval_steps": 100,
+    "include": ["*"],          # name globs of the points to store
+    "exclude": [],             # name globs of the points not to store
+    "learning_curve": False,   # accepted, not yet used
+    "system_metrics": False,   # accepted, not yet used
+}
+```
+
+Stage markers (`training_started`, `model_saved`, ...) are always stored. A bad
+setting in a run is refused with a 400 whose `field` is `monitoring.<setting>`; a
+bad host default stops `init_ml_feature`. Each run records the settings it used
+under `parameters.monitoring`.
+
 ## Experiment monitoring limitation
 
 Per-step training curves (`TrainingMetricPoint`, polled via
