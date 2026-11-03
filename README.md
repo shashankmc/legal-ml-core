@@ -272,7 +272,7 @@ app.config["LEGAL_ML_MONITORING"] = {
     "include": ["*"],          # name globs of the points to store
     "exclude": [],             # name globs of the points not to store
     "learning_curve": False,   # classical classifiers: learning curve, slower
-    "system_metrics": False,   # accepted, not yet used
+    "system_metrics": False,   # record memory, GPU, speed and time left
     "flush_every_points": 50,  # write waiting metric points once this many wait
     "flush_every_seconds": 2.0,  # or once the oldest has waited this long
 }
@@ -291,6 +291,13 @@ it). Each fit stores `learning_curve_train_accuracy` (group `train`) and
 to 12 growing numbers of iterations, with the iteration as `training_step`.
 Training takes several times longer, so it is off by default. A Stop is
 honoured between fits.
+
+With `system_metrics` on, a run records `system` points: `memory_mb` (the worker
+process's memory), `gpu_memory_mb` and `gpu_use_percent` when CUDA is available,
+`samples_per_second` and, for fine-tuning, `seconds_remaining`. Fine-tuning takes
+them every `log_every_n_steps`; a classical run takes them at each stage, and its
+speed once training ends. Memory comes from psutil when it is installed, else from
+the standard library; GPU use needs pynvml.
 
 ## Experiment monitoring limitation
 

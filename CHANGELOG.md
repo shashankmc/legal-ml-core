@@ -21,8 +21,8 @@ While the version is 0.x, minor releases may contain breaking changes.
   `log_every_n_steps`, `eval_strategy` (`epoch` or `steps`) with `eval_steps`, and
   `include` / `exclude` name globs for which metric points are stored (stage markers
   always are), and `flush_every_points` (50) / `flush_every_seconds` (2.0) for how
-  often the worker writes metric points in a batch, `learning_curve` and
-  `system_metrics` (accepted but not used yet).
+  often the worker writes metric points in a batch, plus `learning_curve` and
+  `system_metrics` (both off by default, described below).
   The host sets the defaults in `LEGAL_ML_MONITORING`, and a bad default stops
   `init_ml_feature`. A bad setting is refused with a 400 whose `field` is
   `monitoring.<setting>`. Fine-tuning used to log every 10 steps and evaluate each
@@ -30,6 +30,12 @@ While the version is 0.x, minor releases may contain breaking changes.
 - A run's `parameters` record the monitoring it used, as `monitoring`, with the
   defaults filled in. The queue message carries it as `monitoring`. Group names
   survive a retrain that changed only the monitoring.
+- With `monitoring.system_metrics` on, a run records resource and throughput
+  readings as `system` points: `memory_mb`, `gpu_memory_mb` and `gpu_use_percent`
+  (only when CUDA is available), `samples_per_second` and, when fine-tuning,
+  `seconds_remaining`. Fine-tuning takes them every `log_every_n_steps`; a
+  classical run takes them at each stage. Off by default. No new dependency:
+  memory comes from psutil when it is installed, else from the standard library.
 
 - Each training job records `parameters`, the Model's settings when the run
   started, so retraining no longer loses what an earlier run used. Jobs from
