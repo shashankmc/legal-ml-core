@@ -18,6 +18,15 @@ While the version is 0.x, minor releases may contain breaking changes.
 - Migration `lmc_0005_training_job_parameters` adds `training_jobs.parameters`.
   Hosts with their own Alembic graph need a merge revision.
 
+### Changed
+
+- `PUT /api/models/<id>` refuses a change of `parameters` with a 409 while the
+  Model has a pending or running job. A rename, or the same parameters, still
+  goes through.
+- A successful retrain keeps the group names saved with `PUT
+  /api/models/<id>/labels` (`metrics.display_labels`) only when the run used the
+  same parameters as the run before it. Before, every retrain dropped them.
+
 ## [0.5.2] - 2026-10-31
 
 ### Added
