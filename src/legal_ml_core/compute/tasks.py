@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 import joblib
@@ -39,25 +40,39 @@ class MetricLogger:
     the name.
     """
 
-    def __init__(self, training_job_id):
+    def __init__(self, training_job_id, flush_every_points=50, flush_every_seconds=2.0, clock=time.monotonic):
         self.training_job_id = training_job_id
         self._counter = 0
+        self._flush_every_points = flush_every_points
+        self._flush_every_seconds = flush_every_seconds
+        self._clock = clock
+        self._buffer = []
 
     def log(self, metric_name, value, epoch=None, training_step=None, group=None):
         step = self._counter
         self._counter += 1
-        point = TrainingMetricPoint(
-            training_job_id=self.training_job_id,
-            step=step,
-            epoch=epoch,
-            training_step=training_step,
-            metric_name=metric_name,
-            metric_group=group or metric_group_for(metric_name),
-            value=float(value),
+        self._buffer.append(
+            dict(
+                training_job_id=self.training_job_id,
+                step=step,
+                epoch=epoch,
+                training_step=training_step,
+                metric_name=metric_name,
+                metric_group=group or metric_group_for(metric_name),
+                value=float(value),
+            )
         )
-        db.session.add(point)
-        db.session.commit()
+        if len(self._buffer) >= self._flush_every_points:
+            self.flush()
         return step
+
+    def flush(self):
+        """Write the buffered points in one commit."""
+        if not self._buffer:
+            return
+        db.session.add_all(TrainingMetricPoint(**point) for point in self._buffer)
+        db.session.commit()
+        self._buffer = []
 
 
 def _mark_running(job_id):
