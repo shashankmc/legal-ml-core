@@ -221,7 +221,14 @@ def process_training_task(
     job_id = task_info["job_id"]
     model_id = task_info["model_id"]
     monitoring = _monitoring(task_info)
-    metric_logger = KeptPoints(MetricLogger(job_id), monitoring)
+    metric_logger = KeptPoints(
+        MetricLogger(
+            job_id,
+            flush_every_points=monitoring["flush_every_points"],
+            flush_every_seconds=monitoring["flush_every_seconds"],
+        ),
+        monitoring,
+    )
 
     def cancel_requested():
         """Stop check: the Redis flag (cheap, set by /stop), else the DB row,

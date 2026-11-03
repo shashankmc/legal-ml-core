@@ -49,6 +49,12 @@ def _create(client, auth_headers, dataset_id, monitoring, model_type="logistic_r
         ({"exclude": [3]}, "monitoring.exclude", "Metrics to drop must be a list of names."),
         ({"learning_curve": "yes"}, "monitoring.learning_curve", "Learning curve must be true or false."),
         ({"system_metrics": 1}, "monitoring.system_metrics", "Resource readings must be true or false."),
+        ({"flush_every_points": 0}, "monitoring.flush_every_points", "Points per write must be a whole number above 0."),
+        ({"flush_every_points": 1.5}, "monitoring.flush_every_points", "Points per write must be a whole number above 0."),
+        ({"flush_every_seconds": 0}, "monitoring.flush_every_seconds", "Seconds between writes must be a number above 0."),
+        ({"flush_every_seconds": -1.5}, "monitoring.flush_every_seconds", "Seconds between writes must be a number above 0."),
+        ({"flush_every_seconds": "2"}, "monitoring.flush_every_seconds", "Seconds between writes must be a number above 0."),
+        ({"flush_every_seconds": True}, "monitoring.flush_every_seconds", "Seconds between writes must be a number above 0."),
     ],
 )
 def test_bad_monitoring_settings_are_refused_naming_the_field(client, auth_headers, dataset_id, monitoring, field, says):
@@ -77,6 +83,8 @@ DEFAULT_MONITORING = {
     "exclude": [],
     "learning_curve": False,
     "system_metrics": False,
+    "flush_every_points": 50,
+    "flush_every_seconds": 2.0,
 }
 
 
@@ -255,6 +263,34 @@ def test_the_trainer_gets_the_monitoring_the_run_recorded(app, client, auth_head
 
     assert seen == _recorded(client, auth_headers, model_id)
     assert (seen["log_every_n_steps"], seen["eval_strategy"]) == (50, "steps")
+
+
+def test_a_fractional_number_of_seconds_between_writes_is_accepted(client, auth_headers, dataset_id):
+    model_id = _start(client, auth_headers, dataset_id, {"flush_every_seconds": 0.5})
+
+    assert _recorded(client, auth_headers, model_id)["flush_every_seconds"] == 0.5
+
+
+def test_the_metric_points_are_written_as_often_as_the_run_says(
+    app, client, auth_headers, fake_redis, dataset_id, monkeypatch
+):
+    from legal_ml_core.compute import tasks
+
+    app.config["LEGAL_ML_MONITORING"] = {"flush_every_seconds": 10}
+    _start(client, auth_headers, dataset_id, {"flush_every_points": 7})
+    made = []
+
+    class Recording(MetricLogger):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(kwargs)
+
+    monkeypatch.setattr(tasks, "MetricLogger", Recording)
+    task = json.loads(fake_redis.rpop("training_queue"))
+    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=MLModelTrainer)
+
+    assert made == [{"flush_every_points": 7, "flush_every_seconds": 10}]
+    assert _stored(task["job_id"]) == STAGES  # the end-of-run flush still writes every point
 
 
 def test_the_api_docs_list_every_monitoring_setting_with_its_default():

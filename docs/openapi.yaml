@@ -1711,6 +1711,8 @@ components:
         exclude: { type: array, items: { type: string }, default: [], description: Name globs of points not to store. }
         learning_curve: { type: boolean, default: false, description: Accepted, not yet used. }
         system_metrics: { type: boolean, default: false, description: Accepted, not yet used. }
+        flush_every_points: { type: integer, minimum: 1, default: 50, description: The worker writes waiting metric points once this many are waiting. }
+        flush_every_seconds: { type: number, exclusiveMinimum: 0, default: 2.0, description: The worker writes waiting metric points once the oldest has waited this many seconds. }
     TrainingMetricPoint:
       type: object
       properties:

@@ -16,6 +16,12 @@ def _whole_number_above_zero(label, value):
     return None
 
 
+def _number_above_zero(label, value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+        return f"{label} must be a number above 0."
+    return None
+
+
 def _one_of(*options):
     def check(label, value):
         if value not in options:
@@ -49,6 +55,10 @@ MONITORING_FIELDS = {
     # Accepted now, recorded later (BAIGLE #93, #94).
     "learning_curve": {"label": "Learning curve", "default": False, "check": _true_or_false},
     "system_metrics": {"label": "Resource readings", "default": False, "check": _true_or_false},
+    # How the worker batches metric point writes (BAIGLE #92): once this many
+    # are waiting, or the oldest has waited this long.
+    "flush_every_points": {"label": "Points per write", "default": 50, "check": _whole_number_above_zero},
+    "flush_every_seconds": {"label": "Seconds between writes", "default": 2.0, "check": _number_above_zero},
 }
 
 

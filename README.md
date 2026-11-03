@@ -273,6 +273,8 @@ app.config["LEGAL_ML_MONITORING"] = {
     "exclude": [],             # name globs of the points not to store
     "learning_curve": False,   # accepted, not yet used
     "system_metrics": False,   # accepted, not yet used
+    "flush_every_points": 50,  # write waiting metric points once this many wait
+    "flush_every_seconds": 2.0,  # or once the oldest has waited this long
 }
 ```
 

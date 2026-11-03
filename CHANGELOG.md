@@ -13,7 +13,9 @@ While the version is 0.x, minor releases may contain breaking changes.
 - Each run can set its own monitoring under `parameters.monitoring`:
   `log_every_n_steps`, `eval_strategy` (`epoch` or `steps`) with `eval_steps`, and
   `include` / `exclude` name globs for which metric points are stored (stage markers
-  always are). `learning_curve` and `system_metrics` are accepted but not used yet.
+  always are), and `flush_every_points` (50) / `flush_every_seconds` (2.0) for how
+  often the worker writes metric points in a batch. `learning_curve` and
+  `system_metrics` are accepted but not used yet.
   The host sets the defaults in `LEGAL_ML_MONITORING`, and a bad default stops
   `init_ml_feature`. A bad setting is refused with a 400 whose `field` is
   `monitoring.<setting>`. Fine-tuning used to log every 10 steps and evaluate each
