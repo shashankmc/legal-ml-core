@@ -203,11 +203,13 @@ def test_a_fine_tuning_run_stores_only_the_points_its_globs_keep(app, dataset_id
     db.session.add(job)
     db.session.commit()
     monitoring = effective_monitoring(run={"exclude": ["learning_rate", "grad_norm"]})
-    callback = TrainingMetricCallback(KeptPoints(MetricLogger(job.id), monitoring))
+    kept = KeptPoints(MetricLogger(job.id), monitoring)
+    callback = TrainingMetricCallback(kept)
 
     state = SimpleNamespace(epoch=0.5, global_step=10)
     callback.on_log(None, state, None, logs={"loss": 0.7, "learning_rate": 2e-5, "grad_norm": 1.2})
     callback.on_log(None, state, None, logs={"eval_loss": 0.6, "eval_accuracy": 0.8})
+    kept.flush()  # reaches the batched logger underneath
 
     assert _stored(job.id) == ["loss", "eval_loss", "eval_accuracy"]
 
