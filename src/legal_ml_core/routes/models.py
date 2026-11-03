@@ -5,6 +5,7 @@ from ..active_learning.loop import training_refusal
 from ..annotation_queue import apply_saved_annotations
 from ..models import ALRound, Model, Dataset, TrainingJob
 from ..db_utils import project_belongs_to_owner
+from ..monitoring import monitoring_refusal
 from ..job_state import (
     ACTIVE_JOB_STATUSES,
     COULD_NOT_START_MESSAGE,
@@ -629,6 +630,10 @@ def parameter_refusal(model_type, parameters, dataset=None):
     a choice a `multiclass` rule forbids does so."""
     if not isinstance(parameters, dict):
         return {"error": "parameters must be an object"}
+    if "monitoring" in parameters:
+        refusal = monitoring_refusal(parameters["monitoring"])
+        if refusal:
+            return refusal
 
     info = AVAILABLE_MODELS[model_category_for(model_type)][model_type]
     fields = info["parameters"]
