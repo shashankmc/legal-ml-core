@@ -135,3 +135,110 @@ def test_paginated_rows_route(client, auth_headers, app, tmp_path):
     )
     assert len(last.get_json()["rows"]) == 20
     assert last.get_json()["has_more"] is False
+
+
+def _rows_dataset(app, tmp_path, csv_text, owner_id=TEST_USER_ID, name="rows.csv"):
+    csv_path = tmp_path / name
+    csv_path.write_text(csv_text)
+    with app.app_context():
+        dataset = Dataset(
+            owner_id=owner_id,
+            name="Rows",
+            file_path=str(csv_path),
+            row_count=0,
+            columns=["text", "label"],
+            task_type="classification",
+        )
+        db.session.add(dataset)
+        db.session.commit()
+        return dataset.id
+
+
+# 60 texts with the word "breach" in class A, 10 in class B, and 30 with a
+# longer word that merely starts with it, which a term filter must not match.
+_FILTER_CSV = "text,label\n" + "\n".join(
+    [f"Breach of clause {i},A" for i in range(60)]
+    + [f"breach notice {i},B" for i in range(10)]
+    + [f"breaches galore {i},A" for i in range(30)]
+)
+
+
+def test_rows_filter_by_term_and_class_page_through_the_filtered_total(
+    client, auth_headers, app, tmp_path
+):
+    dataset_id = _rows_dataset(app, tmp_path, _FILTER_CSV)
+
+    first = client.get(
+        f"/api/datasets/{dataset_id}/rows?term=breach&label=A&offset=0&limit=50",
+        headers=auth_headers,
+    ).get_json()
+    assert first["total_rows"] == 60
+    assert len(first["rows"]) == 50
+    assert first["has_more"] is True
+    assert all(row["label"] == "A" for row in first["rows"])
+
+    last = client.get(
+        f"/api/datasets/{dataset_id}/rows?term=breach&label=A&offset=50&limit=50",
+        headers=auth_headers,
+    ).get_json()
+    assert [row["text"] for row in last["rows"]] == [
+        f"Breach of clause {i}" for i in range(50, 60)
+    ]
+    assert last["has_more"] is False
+
+
+def test_rows_filter_by_term_alone_matches_whole_words_in_any_case(
+    client, auth_headers, app, tmp_path
+):
+    dataset_id = _rows_dataset(app, tmp_path, _FILTER_CSV)
+
+    body = client.get(
+        f"/api/datasets/{dataset_id}/rows?term=BREACH", headers=auth_headers
+    ).get_json()
+    assert body["total_rows"] == 70
+
+
+def test_rows_filter_by_class_alone(client, auth_headers, app, tmp_path):
+    dataset_id = _rows_dataset(app, tmp_path, _FILTER_CSV)
+
+    body = client.get(
+        f"/api/datasets/{dataset_id}/rows?label=B", headers=auth_headers
+    ).get_json()
+    assert body["total_rows"] == 10
+
+
+def test_the_filtered_total_equals_the_eda_count_in_the_class(
+    client, auth_headers, app, tmp_path
+):
+    """The drill-down count on the EDA page and the rows it opens must agree."""
+    dataset_id = _rows_dataset(app, tmp_path, _FILTER_CSV)
+
+    eda = client.get(f"/api/datasets/{dataset_id}/eda", headers=auth_headers).get_json()
+    stats = eda["task_specific_analysis"]["keyword_stats"]
+    entry = next(e for e in stats["B"] if e["term"] == "breach")
+
+    rows = client.get(
+        f"/api/datasets/{dataset_id}/rows?term=breach&label=B", headers=auth_headers
+    ).get_json()
+    assert rows["total_rows"] == entry["in_class"]
+
+
+def test_a_class_filter_on_a_dataset_without_labels_is_refused(
+    client, auth_headers, app, tmp_path
+):
+    dataset_id = _rows_dataset(app, tmp_path, "text\nbreach one\nbreach two\n")
+
+    resp = client.get(f"/api/datasets/{dataset_id}/rows?label=A", headers=auth_headers)
+    assert resp.status_code == 400
+    assert "label" in resp.get_json()["error"].lower()
+
+
+def test_filtered_rows_of_another_owners_dataset_are_not_found(
+    client, auth_headers, app, tmp_path
+):
+    dataset_id = _rows_dataset(app, tmp_path, _FILTER_CSV, owner_id="other-user")
+
+    resp = client.get(
+        f"/api/datasets/{dataset_id}/rows?term=breach&label=A", headers=auth_headers
+    )
+    assert resp.status_code == 404
