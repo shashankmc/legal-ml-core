@@ -425,6 +425,29 @@ paths:
                   model: { $ref: "#/components/schemas/Model" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/models/{model_id}/runs:
+    parameters:
+      - $ref: "#/components/parameters/ModelId"
+    get:
+      tags: [models]
+      summary: List a model's training runs
+      description: >-
+        Newest first, at most 50. Each run has the settings it started with and its
+        headline scores. `parameters` is null for runs from before settings were recorded.
+      operationId: listModelRuns
+      responses:
+        "200":
+          description: The model's runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items: { $ref: "#/components/schemas/TrainingRun" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/models/{model_id}/download:
     parameters:
       - $ref: "#/components/parameters/ModelId"
@@ -1609,6 +1632,9 @@ components:
         model_id: { type: string }
         status: { type: string, enum: [pending, running, completed, failed, cancelled] }
         progress: { type: [number, "null"] }
+        parameters:
+          type: [object, "null"]
+          description: The model's parameters when the run started; null for older runs.
         metrics: { type: [object, "null"] }
         error_message: { type: [string, "null"] }
         status_message:
@@ -1617,6 +1643,24 @@ components:
         started_at: { type: [string, "null"], format: date-time }
         completed_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
+    TrainingRun:
+      type: object
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [pending, running, completed, failed, cancelled] }
+        parameters:
+          type: [object, "null"]
+          description: The model's parameters when the run started; null for older runs.
+        scores:
+          type: object
+          description: >-
+            The headline scores the run produced, where present: accuracy, precision,
+            recall, f1_score, silhouette_score, n_clusters, n_topics, perplexity.
+          additionalProperties: { type: number }
+        error_message: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
     TrainingMetricPoint:
       type: object
       properties:

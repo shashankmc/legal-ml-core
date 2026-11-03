@@ -159,6 +159,8 @@ class TrainingJob(MLBase):
         db.String(50), default="pending"
     )  # pending, running, completed, failed, cancelled
     progress = db.Column(db.Integer, default=0)
+    # The Model's settings when the run started; null for older runs.
+    parameters = db.Column(db.JSON)
     metrics = db.Column(db.JSON)
     error_message = db.Column(db.Text)
     started_at = db.Column(db.DateTime)
@@ -181,6 +183,7 @@ class TrainingJob(MLBase):
             "model_id": self.model_id,
             "status": self.status,
             "progress": self.progress,
+            "parameters": self.parameters,
             "metrics": self.metrics,
             "error_message": self.error_message,
             "started_at": self.started_at.isoformat() if self.started_at else None,
