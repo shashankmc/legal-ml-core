@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 import joblib
@@ -37,27 +38,56 @@ class MetricLogger:
 
     `group` is one of metric_groups.METRIC_GROUPS; left out, it is derived from
     the name.
+
+    Points are buffered and written in one commit once `flush_every_points`
+    are waiting or the oldest has waited `flush_every_seconds` (checked when a
+    point is logged), and at once for a stage marker. Callers `flush()` when a
+    run ends. A failed write keeps the batch, so the cursor has no gaps.
     """
 
-    def __init__(self, training_job_id):
+    def __init__(
+        self, training_job_id, flush_every_points=50, flush_every_seconds=2.0, clock=time.monotonic
+    ):
         self.training_job_id = training_job_id
         self._counter = 0
+        self._flush_every_points = flush_every_points
+        self._flush_every_seconds = flush_every_seconds
+        self._clock = clock
+        self._buffer = []
+        self._oldest_buffered_at = None
 
     def log(self, metric_name, value, epoch=None, training_step=None, group=None):
         step = self._counter
         self._counter += 1
-        point = TrainingMetricPoint(
-            training_job_id=self.training_job_id,
-            step=step,
-            epoch=epoch,
-            training_step=training_step,
-            metric_name=metric_name,
-            metric_group=group or metric_group_for(metric_name),
-            value=float(value),
+        if not self._buffer:
+            self._oldest_buffered_at = self._clock()
+        group = group or metric_group_for(metric_name)
+        self._buffer.append(
+            dict(
+                training_job_id=self.training_job_id,
+                step=step,
+                epoch=epoch,
+                training_step=training_step,
+                metric_name=metric_name,
+                metric_group=group,
+                value=float(value),
+            )
         )
-        db.session.add(point)
-        db.session.commit()
+        if (
+            group == "stage"
+            or len(self._buffer) >= self._flush_every_points
+            or self._clock() - self._oldest_buffered_at >= self._flush_every_seconds
+        ):
+            self.flush()
         return step
+
+    def flush(self):
+        """Write the buffered points in one commit."""
+        if not self._buffer:
+            return
+        db.session.add_all(TrainingMetricPoint(**point) for point in self._buffer)
+        db.session.commit()
+        self._buffer = []
 
 
 def _mark_running(job_id):
@@ -294,6 +324,7 @@ def process_training_task(
             model.file_path = model_path
         db.session.commit()
         metric_logger.log("model_saved", 1.0)
+        _call_swallowing_errors_with_rollback(metric_logger.flush)
 
         set_live(
             {
@@ -325,6 +356,7 @@ def process_training_task(
 
         _discard_model_file(model_path)
         _call_swallowing_errors_with_rollback(lambda: metric_logger.log("training_failed", 1.0))
+        _call_swallowing_errors_with_rollback(metric_logger.flush)
         if isinstance(e, REDIS_DOWN_ERRORS):
             # Infrastructure, not the user's data: never show raw Redis text.
             error_message = COULD_NOT_START_MESSAGE
@@ -351,6 +383,8 @@ def process_training_task(
         ):
             set_live({"status": "failed", "error": error_message})
     finally:
+        # Any points still batched, however the run ended (a stop included).
+        _call_swallowing_errors_with_rollback(metric_logger.flush)
         if heartbeat is not None:
             heartbeat.stop()
 
