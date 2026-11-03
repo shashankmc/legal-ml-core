@@ -1,4 +1,5 @@
 import json
+import time
 
 import joblib
 import numpy as np
@@ -26,6 +27,7 @@ from sklearn.tree import DecisionTreeClassifier
 from transformers import TrainerCallback
 
 from ..monitoring import effective_monitoring
+from ..system_metrics import log_system_readings
 from .preprocessing import TextPreprocessor
 
 
@@ -65,6 +67,38 @@ _SUMMARY_VALUES = frozenset({"total_flos", "train_runtime", "train_loss", "epoch
 
 def _is_summary_value(key):
     return key in _SUMMARY_VALUES or key.endswith("_per_second")
+
+
+class SystemMetricsCallback(TrainerCallback):
+    """Takes the resource readings at each logging step (BAIGLE #94), with how
+    many samples a second the run has averaged since it began and how long the
+    steps left would take at that rate."""
+
+    def __init__(self, metric_logger, clock=time.monotonic):
+        self.metric_logger = metric_logger
+        self._clock = clock
+        self._began = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._began = (self._clock(), state.global_step)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % args.logging_steps:
+            return
+        point = {"epoch": state.epoch, "training_step": state.global_step}
+        log_system_readings(self.metric_logger, **point)
+        if self._began is None:
+            self._began = (self._clock(), state.global_step)
+            return
+        began_at, began_step = self._began
+        seconds, steps = self._clock() - began_at, state.global_step - began_step
+        if seconds <= 0 or steps <= 0:
+            return
+        samples_per_step = args.train_batch_size * args.gradient_accumulation_steps
+        self.metric_logger.log("samples_per_second", steps * samples_per_step / seconds, group="system", **point)
+        if state.max_steps > state.global_step:
+            seconds_left = (state.max_steps - state.global_step) * seconds / steps
+            self.metric_logger.log("seconds_remaining", seconds_left, group="system", **point)
 
 
 class TrainingCancelCallback(TrainerCallback):
@@ -531,6 +565,8 @@ class MLModelTrainer:
             }
 
         callbacks = [TrainingMetricCallback(self.metric_logger)] if self.metric_logger else []
+        if self.metric_logger and monitoring.get("system_metrics"):
+            callbacks.append(SystemMetricsCallback(self.metric_logger))
         cancel_callback = None
         if self.cancel_check:
             cancel_callback = TrainingCancelCallback(self.cancel_check)
