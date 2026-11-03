@@ -15,7 +15,7 @@ from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
 from ..metric_groups import metric_group_for
 from ..models import Dataset, Model, TrainingJob, TrainingMetricPoint
-from ..monitoring import KeptPoints, effective_monitoring
+from ..monitoring import FilteredMetricLogger, effective_monitoring
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
@@ -222,7 +222,7 @@ def process_training_task(
     job_id = task_info["job_id"]
     model_id = task_info["model_id"]
     monitoring = _monitoring(task_info)
-    metric_logger = KeptPoints(
+    metric_logger = FilteredMetricLogger(
         MetricLogger(
             job_id,
             flush_every_points=monitoring["flush_every_points"],

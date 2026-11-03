@@ -182,7 +182,7 @@ def test_a_run_keeps_every_point_by_default(client, auth_headers, app, fake_redi
 
 def test_a_fine_tuning_run_stores_only_the_points_its_globs_keep(app, dataset_id):
     from legal_ml_core.compute.trainer import TrainingMetricCallback
-    from legal_ml_core.monitoring import KeptPoints
+    from legal_ml_core.monitoring import FilteredMetricLogger
 
     model = Model(owner_id=TEST_USER_ID, dataset_id=dataset_id, name="M", model_type="legalbert", parameters={})
     db.session.add(model)
@@ -191,7 +191,7 @@ def test_a_fine_tuning_run_stores_only_the_points_its_globs_keep(app, dataset_id
     db.session.add(job)
     db.session.commit()
     monitoring = effective_monitoring(run={"exclude": ["learning_rate", "grad_norm"]})
-    kept = KeptPoints(MetricLogger(job.id), monitoring)
+    kept = FilteredMetricLogger(MetricLogger(job.id), monitoring)
     callback = TrainingMetricCallback(kept)
 
     state = SimpleNamespace(epoch=0.5, global_step=10)

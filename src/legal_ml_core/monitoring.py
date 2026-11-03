@@ -101,7 +101,7 @@ def keeps_point(monitoring, metric_name):
     return included and not any(fnmatchcase(metric_name, glob) for glob in monitoring["exclude"])
 
 
-class KeptPoints:
+class FilteredMetricLogger:
     """A metric logger that passes on only the points the run keeps. Anything
     else, a flush say, goes straight to the logger it wraps."""
 
