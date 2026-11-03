@@ -19,6 +19,7 @@ from ..monitoring import KeptPoints, effective_monitoring
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
+from ..system_metrics import log_system_readings
 from .explain import generate_lime_explanation, generate_shap_explanation
 from .trainer import MLModelTrainer, TrainingCancelled
 
@@ -253,6 +254,13 @@ def process_training_task(
     def set_live(payload):
         _write_live(redis_client, job_id, payload, liveness.status_ttl)
 
+    def reached(stage):
+        """Log a stage marker, then the resource readings there when the run
+        takes them (BAIGLE #94)."""
+        metric_logger.log(stage, 1.0)
+        if monitoring.get("system_metrics"):
+            log_system_readings(metric_logger)
+
     model_path = None
     heartbeat = None
     try:
@@ -268,7 +276,7 @@ def process_training_task(
         heartbeat = heartbeat_factory(redis_client, job_id, liveness).start()
 
         set_live({"status": "running", "progress": 0})
-        metric_logger.log("preprocessing_started", 1.0)
+        reached("preprocessing_started")
 
         # Load dataset
         df = pd.read_csv(task_info["dataset_path"])
@@ -288,11 +296,12 @@ def process_training_task(
         checkpoint()
 
         set_live({"status": "running", "progress": 25})
-        metric_logger.log("preprocessing_done", 1.0)
-        metric_logger.log("training_started", 1.0)
+        reached("preprocessing_done")
+        reached("training_started")
 
         # Train model based on task type
         parameters = _chosen_parameters(task_info)
+        fit_started = time.monotonic()
         if task_info["model_type"] in ["legalbert", "roberta"]:
             parameters["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
@@ -324,7 +333,12 @@ def process_training_task(
         checkpoint()
 
         set_live({"status": "running", "progress": 75})
-        metric_logger.log("training_done", 1.0)
+        reached("training_done")
+        # Fine-tuning reports its own speed as it goes; a classical fit is one call.
+        if monitoring.get("system_metrics") and task_info["model_type"] not in ["legalbert", "roberta"]:
+            fit_seconds = time.monotonic() - fit_started
+            if fit_seconds > 0:
+                metric_logger.log("samples_per_second", len(texts) / fit_seconds, group="system")
 
         # Save model
         model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
@@ -350,7 +364,7 @@ def process_training_task(
             model.metrics = _with_kept_group_names(model, job_id, metrics)
             model.file_path = model_path
         db.session.commit()
-        metric_logger.log("model_saved", 1.0)
+        reached("model_saved")
         _call_swallowing_errors_with_rollback(metric_logger.flush)
 
         set_live(

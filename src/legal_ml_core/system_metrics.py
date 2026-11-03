@@ -48,3 +48,9 @@ def _gpu_readings():
 def system_readings():
     """The readings taken now, by point name."""
     return {"memory_mb": _memory_bytes() / _MB, **_gpu_readings()}
+
+
+def log_system_readings(metric_logger, epoch=None, training_step=None):
+    """Log the readings taken now as `system` points."""
+    for name, value in system_readings().items():
+        metric_logger.log(name, value, epoch=epoch, training_step=training_step, group="system")
