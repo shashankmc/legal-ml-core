@@ -164,3 +164,22 @@ def test_a_stop_during_the_learning_curve_cancels_the_run(app, client, auth_head
     names = [p["metric_name"] for p in _points(client, auth_headers, task["job_id"])]
     assert names[-1] == "training_cancelled"
     assert names.count("learning_curve_eval_accuracy") == 1  # no fit after the Stop
+
+
+@pytest.mark.parametrize(
+    "task_type, model_type",
+    [("clustering", "kmeans"), ("clustering", "hierarchical"), ("clustering", "dbscan"), ("topic_modeling", "lda"), ("topic_modeling", "nmf")],
+)
+def test_groupings_have_no_labels_to_score_so_they_train_as_before(fake_redis, classification_df, task_type, model_type):
+    """A learning curve scores against labels; finding groups has none."""
+    logger = RecordingLogger()
+    trainer = MLModelTrainer(redis_client=fake_redis, metric_logger=logger)
+    texts, _, _ = trainer.preprocess_data(classification_df, task_type, {})
+    parameters = {"model_id": "lc", "n_clusters": 2, "n_components": 2, "monitoring": effective_monitoring(run={"learning_curve": True})}
+
+    if task_type == "clustering":
+        trainer.train_clustering_model(texts, model_type, parameters)
+    else:
+        trainer.train_topic_modeling(texts, model_type, parameters)
+
+    assert logger.points == []
