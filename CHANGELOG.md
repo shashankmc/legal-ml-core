@@ -39,6 +39,12 @@ While the version is 0.x, minor releases may contain breaking changes.
   do not slow it. Off by default. No new dependency:
   memory comes from psutil when it is installed, else from the standard library.
 
+- Each metric point says what it means: `x_kind` is what its `training_step`
+  counts (`step`, `iteration` or `training_examples`), and `unit` is a system
+  point's unit (`MB`, `%`, `samples/s` or `s`, null for other points). Both are
+  worked out from the stored point, so older points have them too and no
+  migration is needed.
+
 - Each training job records `parameters`, the Model's settings when the run
   started, so retraining no longer loses what an earlier run used. Jobs from
   before this release have `parameters: null`.

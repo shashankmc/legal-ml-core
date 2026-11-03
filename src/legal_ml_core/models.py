@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from .db import MLBase, db
-from .metric_groups import metric_group_for
+from .metric_groups import metric_group_for, unit_for, x_kind_for
 
 
 class MLProject(MLBase):
@@ -503,6 +503,7 @@ class TrainingMetricPoint(MLBase):
     )
 
     def to_dict(self):
+        group = self.metric_group or metric_group_for(self.metric_name)
         return {
             "id": self.id,
             "training_job_id": self.training_job_id,
@@ -510,7 +511,9 @@ class TrainingMetricPoint(MLBase):
             "epoch": self.epoch,
             "training_step": self.training_step,
             "metric_name": self.metric_name,
-            "group": self.metric_group or metric_group_for(self.metric_name),
+            "group": group,
+            "x_kind": x_kind_for(self.metric_name, self.epoch, self.training_step),
+            "unit": unit_for(self.metric_name, group),
             "value": self.value,
             "created_at": self.created_at.isoformat(),
         }
