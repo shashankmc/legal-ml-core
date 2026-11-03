@@ -42,7 +42,8 @@ class TrainingMetricCallback(TrainerCallback):
     LegalBERT/RoBERTa path genuine per-step training curves (loss, eval_accuracy,
     etc.) — unlike the classical sklearn algorithms below, which fit synchronously
     with no epoch loop and only get coarse phase markers (logged by the caller in
-    legal_ml_core.compute.tasks, not here).
+    legal_ml_core.compute.tasks, not here), plus a learning curve when the run
+    asks for one.
     """
 
     def __init__(self, metric_logger):

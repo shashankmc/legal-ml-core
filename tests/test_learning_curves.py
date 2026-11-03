@@ -3,11 +3,16 @@
 parts of its training split. The points carry the training-set size as their
 `training_step`, under `learning_curve_*` names, so a chart can draw them
 against size."""
+import json
+
 import pandas as pd
 import pytest
 
+from legal_ml_core import TrainingJob, db
+from legal_ml_core.compute.tasks import process_training_task
 from legal_ml_core.compute.trainer import MLModelTrainer
 from legal_ml_core.monitoring import effective_monitoring
+from tests.test_monitoring_settings import _start, dataset_id  # noqa: F401
 
 CLASSIFIERS = ["svm", "decision_tree", "random_forest", "naive_bayes", "logistic_regression"]
 
@@ -92,3 +97,70 @@ def test_algorithms_without_iterations_record_no_loss(fake_redis, classification
     points, _ = _train(fake_redis, classification_df, model_type, {"learning_curve": True})
 
     assert not [p for p in points if p["name"] in ("loss", "eval_loss")]
+
+
+@pytest.mark.parametrize("model_type", ["naive_bayes", "logistic_regression"])
+def test_a_stop_is_honoured_between_learning_curve_fits(fake_redis, classification_df, model_type):
+    from legal_ml_core.compute.trainer import TrainingCancelled
+
+    checks = []
+
+    def stop_after_two_fits():
+        checks.append(1)
+        return len(checks) > 2
+
+    logger = RecordingLogger()
+    trainer = MLModelTrainer(redis_client=fake_redis, metric_logger=logger, cancel_check=stop_after_two_fits)
+    texts, labels, _ = trainer.preprocess_data(classification_df, "classification", {})
+    parameters = {"model_id": "lc", "monitoring": effective_monitoring(run={"learning_curve": True})}
+
+    with pytest.raises(TrainingCancelled):
+        trainer.train_classification_model(texts, labels, model_type, parameters)
+
+    assert [p["training_step"] for p in logger.points if p["group"] == "eval"] == [3, 8]
+    assert trainer.model is None or not hasattr(trainer.model, "classes_")  # the real fit never ran
+
+
+def _points(client, auth_headers, job_id):
+    return client.get(f"/api/training/{job_id}/metrics", headers=auth_headers).get_json()["points"]
+
+
+def test_a_run_stores_its_learning_curve_against_training_set_size(app, client, auth_headers, fake_redis, dataset_id):
+    _start(client, auth_headers, dataset_id, {"learning_curve": True})
+    task = json.loads(fake_redis.rpop("training_queue"))
+
+    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=MLModelTrainer)
+
+    assert db.session.get(TrainingJob, task["job_id"]).status == "completed"
+    curve = [
+        (p["metric_name"], p["group"], p["training_step"])
+        for p in _points(client, auth_headers, task["job_id"])
+        if p["metric_name"].startswith("learning_curve_")
+    ]
+    assert ("learning_curve_train_accuracy", "train", 16) in curve
+    assert ("learning_curve_eval_accuracy", "eval", 16) in curve
+    assert len({size for _, _, size in curve}) >= 3
+
+
+def test_a_stop_during_the_learning_curve_cancels_the_run(app, client, auth_headers, fake_redis, dataset_id):
+    _start(client, auth_headers, dataset_id, {"learning_curve": True})
+    task = json.loads(fake_redis.rpop("training_queue"))
+
+    def stopping_on_the_first_curve_point(redis_client, metric_logger, cancel_check):
+        class Stopping:
+            def log(self, metric_name, *args, **kwargs):
+                if metric_name.startswith("learning_curve_"):
+                    client.post(f"/api/training/stop/{task['job_id']}", headers=auth_headers)
+                return metric_logger.log(metric_name, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(metric_logger, name)
+
+        return MLModelTrainer(redis_client, metric_logger=Stopping(), cancel_check=cancel_check)
+
+    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=stopping_on_the_first_curve_point)
+
+    assert db.session.get(TrainingJob, task["job_id"]).status == "cancelled"
+    names = [p["metric_name"] for p in _points(client, auth_headers, task["job_id"])]
+    assert names[-1] == "training_cancelled"
+    assert names.count("learning_curve_eval_accuracy") == 1  # no fit after the Stop

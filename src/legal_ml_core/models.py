@@ -483,7 +483,8 @@ class TrainingMetricPoint(MLBase):
     )
     step = db.Column(db.Integer, nullable=False)
     epoch = db.Column(db.Float, nullable=True)
-    # The trainer's own step (HF `global_step`); None for classical algorithms.
+    # The trainer's own step (HF `global_step`), or a classical learning curve's
+    # iteration, or for `learning_curve_*` points its training-set size.
     training_step = db.Column(db.Integer, nullable=True)
     metric_name = db.Column(db.String(100), nullable=False)
     # One of metric_groups.METRIC_GROUPS. None on rows stored before groups

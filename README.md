@@ -271,7 +271,7 @@ app.config["LEGAL_ML_MONITORING"] = {
     "eval_steps": 100,
     "include": ["*"],          # name globs of the points to store
     "exclude": [],             # name globs of the points not to store
-    "learning_curve": False,   # accepted, not yet used
+    "learning_curve": False,   # classical classifiers: learning curve, slower
     "system_metrics": False,   # accepted, not yet used
     "flush_every_points": 50,  # write waiting metric points once this many wait
     "flush_every_seconds": 2.0,  # or once the oldest has waited this long
@@ -283,6 +283,15 @@ setting in a run is refused with a 400 whose `field` is `monitoring.<setting>`; 
 bad host default stops `init_ml_feature`. Each run records the settings it used
 under `parameters.monitoring`.
 
+With `learning_curve` on, a classical Text Classification algorithm is also
+fitted on growing parts of its training split (10%, 25%, 50%, 75% and all of
+it). Each fit stores `learning_curve_train_accuracy` (group `train`) and
+`learning_curve_eval_accuracy` (group `eval`), with the part's size as
+`training_step`. Logistic regression also stores `loss` and `eval_loss` after up
+to 12 growing numbers of iterations, with the iteration as `training_step`.
+Training takes several times longer, so it is off by default. A Stop is
+honoured between fits.
+
 ## Experiment monitoring limitation
 
 Per-step training curves (`TrainingMetricPoint`, polled via
@@ -292,7 +301,8 @@ epoch/step loop. Classical sklearn algorithms (SVM, decision tree, random
 forest, naive Bayes, logistic regression, KMeans/agglomerative/DBSCAN,
 LDA/NMF) fit synchronously with no epoch loop, so they only get coarse phase
 markers (`preprocessing_started`, `preprocessing_done`, `training_started`,
-`training_done`, `model_saved`). Cross-run hyperparameter-vs-performance
+`training_done`, `model_saved`), unless `monitoring.learning_curve` adds a
+learning curve to a Text Classification run (see Monitoring settings). Cross-run hyperparameter-vs-performance
 comparison (`GET /visualization/parameter-comparison`) works uniformly
 across all model types since it's retrospective, reading already-stored
 `Model.parameters`/`TrainingJob.metrics`.
