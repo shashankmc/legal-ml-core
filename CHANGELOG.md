@@ -15,6 +15,7 @@ While the version is 0.x, minor releases may contain breaking changes.
   before this release have `parameters: null`.
 - `GET /api/models/<id>/runs` lists a Model's runs newest first, owner-scoped,
   with `parameters`, the headline `scores`, `status`, `error_message` and dates.
+  It lists at most 50, and `has_more` says whether older runs exist.
 - Migration `lmc_0005_training_job_parameters` adds `training_jobs.parameters`.
   Hosts with their own Alembic graph need a merge revision.
 - EDA for Text Classification adds `keyword_stats` beside `keywords_by_class`: each

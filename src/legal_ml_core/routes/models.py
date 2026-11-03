@@ -735,6 +735,9 @@ HEADLINE_SCORES = (
 )
 
 
+RUNS_LIMIT = 50
+
+
 def _run_dict(job):
     metrics = job.metrics or {}
     return {
@@ -759,13 +762,20 @@ def list_model_runs(model_id):
         if not model:
             return jsonify({"error": "Model not found"}), 404
 
+        # One past the limit tells whether older runs exist, so the oldest
+        # listed run is not taken for the Model's first.
         jobs = (
             TrainingJob.query.filter_by(model_id=model.id, owner_id=owner_id)
             .order_by(TrainingJob.created_at.desc())
-            .limit(50)
+            .limit(RUNS_LIMIT + 1)
             .all()
         )
-        return jsonify({"runs": [_run_dict(job) for job in jobs]}), 200
+        return jsonify(
+            {
+                "runs": [_run_dict(job) for job in jobs[:RUNS_LIMIT]],
+                "has_more": len(jobs) > RUNS_LIMIT,
+            }
+        ), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
