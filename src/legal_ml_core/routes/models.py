@@ -712,6 +712,56 @@ def get_model(model_id):
         return jsonify({"error": str(e)}), 500
 
 
+# The scores a run is compared on; the rest of a job's metrics (matrices,
+# reports, keywords) belong to the Model's current result, not to the list.
+HEADLINE_SCORES = (
+    "accuracy",
+    "precision",
+    "recall",
+    "f1_score",
+    "silhouette_score",
+    "n_clusters",
+    "n_topics",
+    "perplexity",
+)
+
+
+def _run_dict(job):
+    metrics = job.metrics or {}
+    return {
+        "id": job.id,
+        "status": job.status,
+        "parameters": job.parameters,
+        "scores": {key: metrics[key] for key in HEADLINE_SCORES if key in metrics},
+        "error_message": job.error_message,
+        "created_at": job.created_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
+
+
+@models_bp.route("/<model_id>/runs", methods=["GET"])
+@jwt_required()
+def list_model_runs(model_id):
+    """A Model's training runs, newest first: settings, headline scores, status."""
+    try:
+        owner_id = get_jwt_identity()
+        model = Model.query.filter_by(id=model_id, owner_id=owner_id).first()
+        if not model:
+            return jsonify({"error": "Model not found"}), 404
+
+        jobs = (
+            TrainingJob.query.filter_by(model_id=model.id, owner_id=owner_id)
+            .order_by(TrainingJob.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        return jsonify({"runs": [_run_dict(job) for job in jobs]}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @models_bp.route("/", methods=["POST"])
 @jwt_required()
 def create_model():
@@ -1292,7 +1342,13 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
         return refusal, 400
 
     # Create training job
-    training_job = TrainingJob(owner_id=owner_id, model_id=model_id, status="pending")
+    # The settings snapshot is what Previous runs compares (BAIGLE #83).
+    training_job = TrainingJob(
+        owner_id=owner_id,
+        model_id=model_id,
+        status="pending",
+        parameters=dict(model.parameters or {}),
+    )
     db.session.add(training_job)
     if al_round_id:
         # With the job, so no crash can leave a running job its round doesn't know.
