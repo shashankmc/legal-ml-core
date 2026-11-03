@@ -410,3 +410,35 @@ def test_stop_still_stops_the_worker_when_the_cancel_flag_cannot_be_set(
     assert any(
         job_id in r.getMessage() and TEST_USER_ID in r.getMessage() for r in caplog.records
     ), [r.getMessage() for r in caplog.records]
+
+
+@pytest.mark.parametrize(
+    "ending, last_marker",
+    [("completes", "model_saved"), ("fails", "training_failed"), ("is stopped", "training_cancelled")],
+)
+def test_every_buffered_point_is_written_however_the_run_ends(
+    app, client, auth_headers, fake_redis, queued_job, ending, last_marker
+):
+    """Points logged mid-fit sit in the batch; the run's end must write them,
+    with a gap-free cursor so `since_step` polling misses none."""
+    job_id = queued_job["job_id"]
+
+    class LoggingTrainer(MLModelTrainer):
+        def train_classification_model(self, *a, **k):
+            for value in (0.9, 0.8, 0.7):
+                self.metric_logger.log("loss", value)
+            if ending == "fails":
+                raise RuntimeError("out of memory")
+            if ending == "is stopped":
+                _stop(client, auth_headers, job_id)
+            return super().train_classification_model(*a, **k)
+
+    process_training_task(
+        queued_job, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=LoggingTrainer
+    )
+
+    resp = client.get(f"/api/training/{job_id}/metrics?since_step=-1", headers=auth_headers)
+    points = resp.get_json()["points"]
+    assert [p["step"] for p in points] == list(range(len(points)))
+    assert [p["metric_name"] for p in points].count("loss") == 3
+    assert points[-1]["metric_name"] == last_marker
