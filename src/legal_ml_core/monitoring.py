@@ -4,6 +4,7 @@ metric points it keeps. The package's defaults, then the host's
 
 Each setting is one entry in MONITORING_FIELDS: its label, the name refusals
 use, its default, and the check that says what is wrong with a value."""
+from copy import deepcopy
 from fnmatch import fnmatchcase
 
 from .metric_groups import STAGE_MARKERS
@@ -64,3 +65,17 @@ def monitoring_refusal(monitoring):
         if refusal:
             return {"error": refusal, "field": f"monitoring.{name}"}
     return None
+
+
+def effective_monitoring(host=None, run=None):
+    """The settings a run uses: the package's defaults, then the host's, then the
+    run's own. Both are checked before they get here."""
+    defaults = {name: field["default"] for name, field in MONITORING_FIELDS.items()}
+    return deepcopy(defaults | dict(host or {}) | dict(run or {}))
+
+
+def validate_host_monitoring(config):
+    """Fail at start, not on a user's first run, on a bad `LEGAL_ML_MONITORING`."""
+    refusal = monitoring_refusal(config.get("LEGAL_ML_MONITORING", {}))
+    if refusal:
+        raise ValueError(f"LEGAL_ML_MONITORING: {refusal['error']} ({refusal['field']})")

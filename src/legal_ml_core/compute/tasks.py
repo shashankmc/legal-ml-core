@@ -112,7 +112,7 @@ def _with_kept_group_names(model, job_id, metrics):
     of only some settings matches the form's full copy of the same choices. A
     run from before snapshots has no record of its settings, and the Model may
     have been edited since, so its names are dropped too: names on the wrong
-    groups are worse than lost names."""
+    groups are worse than lost names. Monitoring settings do not count."""
     # Here, not at the top: routes.models imports the training code's siblings.
     from ..routes.models import effective_parameters
 
@@ -131,11 +131,17 @@ def _with_kept_group_names(model, job_id, metrics):
     )
     if job is None or previous is None or previous.parameters is None:
         return metrics
-    if effective_parameters(model.model_type, job.parameters) != effective_parameters(
-        model.model_type, previous.parameters
+    if _learning_settings(effective_parameters(model.model_type, job.parameters)) != _learning_settings(
+        effective_parameters(model.model_type, previous.parameters)
     ):
         return metrics
     return {**metrics, "display_labels": names}
+
+
+def _learning_settings(parameters):
+    """The settings that change what a run learns. Monitoring only changes what
+    is watched, and runs from before it was recorded have none."""
+    return {name: value for name, value in parameters.items() if name != "monitoring"}
 
 
 def _chosen_parameters(task_info):
