@@ -63,3 +63,32 @@ def test_every_classifier_scores_growing_parts_of_its_training_data(fake_redis, 
     assert {group for _, group in train} == {"train"}
     assert evaluation == [(size, "eval") for size in sizes]
     assert all(0.0 <= p["value"] <= 1.0 for p in points if p["name"].startswith("learning_curve_"))
+
+
+@pytest.mark.parametrize("model_type", CLASSIFIERS)
+def test_learning_curves_are_off_by_default_and_leave_the_run_unchanged(fake_redis, classification_df, model_type):
+    off, metrics_off = _train(fake_redis, classification_df, model_type, {})
+    _, metrics_on = _train(fake_redis, classification_df, model_type, {"learning_curve": True})
+
+    assert off == []
+    assert metrics_on == metrics_off
+
+
+def test_logistic_regression_also_records_its_loss_iteration_by_iteration(fake_redis, classification_df):
+    points, _ = _train(fake_redis, classification_df, "logistic_regression", {"learning_curve": True})
+
+    train = [(p["training_step"], p["value"]) for p in points if p["name"] == "loss"]
+    evaluation = _curve(points, "eval_loss")
+    iterations = [step for step, _ in train]
+    assert len(iterations) >= 3 and iterations[0] == 1
+    assert iterations == sorted(iterations) and len(set(iterations)) == len(iterations)
+    assert {p["group"] for p in points if p["name"] == "loss"} == {"train"}
+    assert evaluation == [(step, "eval") for step in iterations]
+    assert train[-1][1] < train[0][1]  # it learns
+
+
+@pytest.mark.parametrize("model_type", ["svm", "decision_tree", "random_forest", "naive_bayes"])
+def test_algorithms_without_iterations_record_no_loss(fake_redis, classification_df, model_type):
+    points, _ = _train(fake_redis, classification_df, model_type, {"learning_curve": True})
+
+    assert not [p for p in points if p["name"] in ("loss", "eval_loss")]
