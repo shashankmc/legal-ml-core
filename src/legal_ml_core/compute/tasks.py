@@ -163,6 +163,7 @@ def _chosen_parameters(task_info):
     parameters = dict(task_info.get("parameters") or {})
     parameters.setdefault("random_state", task_info.get("random_state", 42))
     parameters["model_id"] = task_info["model_id"]
+    parameters["monitoring"] = _monitoring(task_info)
     return parameters
 
 

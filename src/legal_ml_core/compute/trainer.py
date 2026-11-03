@@ -25,6 +25,7 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from transformers import TrainerCallback
 
+from ..monitoring import effective_monitoring
 from .preprocessing import TextPreprocessor
 
 
@@ -68,7 +69,7 @@ def _is_summary_value(key):
 
 class TrainingCancelCallback(TrainerCallback):
     """Ends HF training at the first step boundary after a Stop request, i.e.
-    well within one logging step (logging_steps=10). Polled every step: one
+    well within one logging step (log_every_n_steps). Polled every step: one
     Redis EXISTS per optimizer step is negligible next to a forward/backward
     pass."""
 
@@ -502,16 +503,21 @@ class MLModelTrainer:
         output_dir = parameters.get(
             "output_dir", f"/tmp/transformer_{parameters['model_id']}"
         )
+        # How often the run logs and evaluates (BAIGLE #89).
+        monitoring = effective_monitoring(run=parameters.get("monitoring"))
+        evaluation = {"eval_strategy": monitoring["eval_strategy"]}
+        if monitoring["eval_strategy"] == "steps":
+            evaluation["eval_steps"] = monitoring["eval_steps"]
         training_args = TrainingArguments(
             output_dir=output_dir,
             num_train_epochs=epochs,
             per_device_train_batch_size=batch_size,
             per_device_eval_batch_size=batch_size,
             learning_rate=learning_rate,
-            eval_strategy="epoch",
             save_strategy="no",
-            logging_steps=10,
+            logging_steps=monitoring["log_every_n_steps"],
             use_cpu=not torch.cuda.is_available(),
+            **evaluation,
         )
 
         def compute_metrics(eval_pred):

@@ -8,8 +8,10 @@ import pytest
 from legal_ml_core import Dataset, Model, TrainingJob, TrainingMetricPoint, db
 from legal_ml_core.compute.tasks import MetricLogger, process_training_task
 from legal_ml_core.compute.trainer import MLModelTrainer
+from legal_ml_core.monitoring import effective_monitoring
 from tests.conftest import TEST_USER_ID
 from tests.test_adjust_and_retrain import _name_groups, _retrain
+from tests.test_training_cancel import stub_hf  # noqa: F401
 from tests.test_training_parameters import _run, clustering  # noqa: F401
 
 
@@ -192,7 +194,7 @@ def test_a_run_keeps_every_point_by_default(client, auth_headers, app, fake_redi
 
 def test_a_fine_tuning_run_stores_only_the_points_its_globs_keep(app, dataset_id):
     from legal_ml_core.compute.trainer import TrainingMetricCallback
-    from legal_ml_core.monitoring import KeptPoints, effective_monitoring
+    from legal_ml_core.monitoring import KeptPoints
 
     model = Model(owner_id=TEST_USER_ID, dataset_id=dataset_id, name="M", model_type="legalbert", parameters={})
     db.session.add(model)
@@ -208,3 +210,46 @@ def test_a_fine_tuning_run_stores_only_the_points_its_globs_keep(app, dataset_id
     callback.on_log(None, state, None, logs={"eval_loss": 0.6, "eval_accuracy": 0.8})
 
     assert _stored(job.id) == ["loss", "eval_loss", "eval_accuracy"]
+
+
+def _training_arguments(stub_hf, tmp_path, monitoring):
+    """The arguments fine-tuning hands the trainer. Stopped at its first step,
+    so the stand-in needs no model."""
+    from legal_ml_core.compute.trainer import TrainingCancelled
+
+    trainer = MLModelTrainer(redis_client=None, cancel_check=lambda: bool(stub_hf.instances))
+    parameters = {"model_id": "m", "output_dir": str(tmp_path), "monitoring": monitoring}
+    with pytest.raises(TrainingCancelled):
+        trainer.train_transformer_model(["the court ruled", "the jury convicted"] * 10, [0, 1] * 10, "legalbert", parameters)
+    return stub_hf.instances[0].args
+
+
+def test_fine_tuning_logs_and_evaluates_on_the_run_settings(stub_hf, tmp_path):
+    monitoring = effective_monitoring(run={"log_every_n_steps": 25, "eval_strategy": "steps", "eval_steps": 40})
+
+    args = _training_arguments(stub_hf, tmp_path, monitoring)
+
+    assert (args.logging_steps, args.eval_strategy, args.eval_steps) == (25, "steps", 40)
+
+
+def test_fine_tuning_evaluates_each_epoch_by_default(stub_hf, tmp_path):
+    args = _training_arguments(stub_hf, tmp_path, effective_monitoring())
+
+    assert (args.logging_steps, args.eval_strategy) == (10, "epoch")
+
+
+def test_the_trainer_gets_the_monitoring_the_run_recorded(app, client, auth_headers, fake_redis, dataset_id):
+    app.config["LEGAL_ML_MONITORING"] = {"log_every_n_steps": 50}
+    model_id = _start(client, auth_headers, dataset_id, {"eval_strategy": "steps"})
+    seen = {}
+
+    class Watching(MLModelTrainer):
+        def train_classification_model(self, texts, labels, model_type, parameters):
+            seen.update(parameters["monitoring"])
+            return super().train_classification_model(texts, labels, model_type, parameters)
+
+    task = json.loads(fake_redis.rpop("training_queue"))
+    process_training_task(task, fake_redis, app.config["MODEL_FOLDER"], trainer_factory=Watching)
+
+    assert seen == _recorded(client, auth_headers, model_id)
+    assert (seen["log_every_n_steps"], seen["eval_strategy"]) == (50, "steps")
