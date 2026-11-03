@@ -400,8 +400,10 @@ paths:
                 properties:
                   message: { type: string }
                   model: { $ref: "#/components/schemas/Model" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "The Model is training, so its parameters cannot change; a rename still applies" }
     delete:
       tags: [models]
       summary: Delete a model and its stored file
