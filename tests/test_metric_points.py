@@ -204,3 +204,25 @@ def test_a_stage_marker_is_written_at_once_with_the_points_before_it(app):
         logger.log("training_started", 1.0)
 
         assert [p.metric_name for p in _points(job_id)] == ["loss", "training_started"]
+
+
+def test_points_from_a_failed_write_are_kept_so_the_cursor_has_no_gaps(app, monkeypatch):
+    job_id = _make_job(app)
+    with app.app_context():
+        logger = MetricLogger(job_id, flush_every_points=2, flush_every_seconds=60, clock=_Clock())
+        real_commit = db.session.commit
+
+        def failing_commit():
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(db.session, "commit", failing_commit)
+        logger.log("loss", 0.9)
+        try:
+            logger.log("loss", 0.8)
+        except RuntimeError:
+            db.session.rollback()
+        monkeypatch.setattr(db.session, "commit", real_commit)
+
+        logger.log("loss", 0.7)
+        logger.flush()
+        assert [p.step for p in _points(job_id)] == [0, 1, 2]

@@ -39,6 +39,11 @@ While the version is 0.x, minor releases may contain breaking changes.
   `train_runtime`, `train_loss`, the `*_per_second` rates) or `epoch` as metric
   points, so they no longer flatten the curves. Hosts that read those names from
   `GET /api/training/<job_id>/metrics` will not find them in new runs.
+- The worker writes training metric points in batches, every 50 points or once the
+  oldest has waited 2 seconds, instead of one commit per point. Stage markers are
+  written at once, and every waiting point is written when a run completes, fails
+  or is stopped. Polling `GET /api/training/<job_id>/metrics` can see a point up to
+  2 seconds later than before, and `step` still has no gaps.
 - Distinctive terms that tie on lift are ordered by how many texts in the class contain
   them, then alphabetically, so the order no longer changes between requests.
 - `PUT /api/models/<id>` refuses a change of `parameters` with a 409 while the
