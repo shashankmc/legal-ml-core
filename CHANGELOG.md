@@ -10,6 +10,43 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ### Added
 
+- With `monitoring.learning_curve` on, a classical Text Classification run also
+  stores a learning curve: `learning_curve_train_accuracy` (group `train`) and
+  `learning_curve_eval_accuracy` (group `eval`) at five growing training-set
+  sizes, the size as `training_step`. Logistic regression also stores `loss` and
+  `eval_loss` by iteration, the iteration as `training_step`. It makes training
+  slower, so it stays off by default, and a Stop is honoured between fits.
+  Each model type in `GET /api/models/available` says whether it can, as
+  `supports_learning_curve`.
+
+- Each run can set its own monitoring under `parameters.monitoring`:
+  `log_every_n_steps`, `eval_strategy` (`epoch` or `steps`) with `eval_steps`, and
+  `include` / `exclude` name globs for which metric points are stored (stage markers
+  always are), and `flush_every_points` (50) / `flush_every_seconds` (2.0) for how
+  often the worker writes metric points in a batch, plus `learning_curve` and
+  `system_metrics` (both off by default, described below).
+  The host sets the defaults in `LEGAL_ML_MONITORING`, and a bad default stops
+  `init_ml_feature`. A bad setting is refused with a 400 whose `field` is
+  `monitoring.<setting>`. Fine-tuning used to log every 10 steps and evaluate each
+  epoch; those are now the defaults.
+- A run's `parameters` record the monitoring it used, as `monitoring`, with the
+  defaults filled in. The queue message carries it as `monitoring`. Group names
+  survive a retrain that changed only the monitoring.
+- With `monitoring.system_metrics` on, a run records resource and throughput
+  readings as `system` points: `memory_mb`, `gpu_memory_mb` and `gpu_use_percent`
+  (only when CUDA is available), `samples_per_second` and, when fine-tuning,
+  `seconds_remaining`. Fine-tuning takes them every `log_every_n_steps`; a
+  classical run takes them at each stage, and times its speed over the fit of
+  the model it keeps, in training rows a second, so a learning curve's extra fits
+  do not slow it. Off by default. No new dependency:
+  memory comes from psutil when it is installed, else from the standard library.
+
+- Each metric point says what it means: `x_kind` is what its `training_step`
+  counts (`step`, `iteration` or `training_examples`), and `unit` is a system
+  point's unit (`MB`, `%`, `samples/s` or `s`, null for other points). Both are
+  worked out from the stored point, so older points have them too and no
+  migration is needed.
+
 - Each training job records `parameters`, the Model's settings when the run
   started, so retraining no longer loses what an earlier run used. Jobs from
   before this release have `parameters: null`.
@@ -18,6 +55,14 @@ While the version is 0.x, minor releases may contain breaking changes.
   It lists at most 50, and `has_more` says whether older runs exist.
 - Migration `lmc_0005_training_job_parameters` adds `training_jobs.parameters`.
   Hosts with their own Alembic graph need a merge revision.
+- Training metric points carry a `group` (`train`, `eval`, `system` or `stage`) and,
+  for fine-tuning, `training_step`, the trainer's own step. `step` stays the
+  polling cursor. Points stored before this release get a group from their name:
+  `eval_*` is eval, the run's milestones (`training_started`, `model_saved`, ...)
+  are stage, and the rest are train.
+- Migration `lmc_0006_metric_point_group` adds
+  `training_metric_points.metric_group` and `training_step`, both nullable. Hosts
+  with their own Alembic graph need a merge revision.
 - EDA for Text Classification adds `keyword_stats` beside `keywords_by_class`: each
   distinctive term with `in_class` (texts in the class that contain it), `overall`
   (texts that contain it) and `lift`. `keywords_by_class` keeps its shape.
@@ -27,6 +72,15 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ### Changed
 
+- Fine-tuning no longer stores the trainer's end-of-run summary (`total_flos`,
+  `train_runtime`, `train_loss`, the `*_per_second` rates) or `epoch` as metric
+  points, so they no longer flatten the curves. Hosts that read those names from
+  `GET /api/training/<job_id>/metrics` will not find them in new runs.
+- The worker writes training metric points in batches, every 50 points or once the
+  oldest has waited 2 seconds, instead of one commit per point. Stage markers are
+  written at once, and every waiting point is written when a run completes, fails
+  or is stopped. Polling `GET /api/training/<job_id>/metrics` can see a point up to
+  2 seconds later than before, and `step` still has no gaps.
 - Distinctive terms that tie on lift are ordered by how many texts in the class contain
   them, then alphabetically, so the order no longer changes between requests.
 - `PUT /api/models/<id>` refuses a change of `parameters` with a 409 while the

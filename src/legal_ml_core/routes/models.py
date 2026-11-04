@@ -5,6 +5,7 @@ from ..active_learning.loop import training_refusal
 from ..annotation_queue import apply_saved_annotations
 from ..models import ALRound, Model, Dataset, TrainingJob
 from ..db_utils import project_belongs_to_owner
+from ..monitoring import monitoring_refusal, run_monitoring
 from ..job_state import (
     ACTIVE_JOB_STATUSES,
     COULD_NOT_START_MESSAGE,
@@ -517,6 +518,14 @@ AVAILABLE_MODELS = {
 }
 
 
+# Whether a run can record a learning curve (`monitoring.learning_curve`,
+# BAIGLE #93): MLModelTrainer.train_classification_model records one for the
+# classical classifiers. Fine-tuning draws its own curves, and the groupings
+# have no labels to score.
+for _category, _models in AVAILABLE_MODELS.items():
+    for _info in _models.values():
+        _info["supports_learning_curve"] = _category == "classification"
+
 # Dataset task types whose training is not implemented in the worker yet. Kept
 # explicit so uploads/selection can explain the limitation instead of failing
 # silently at training time.
@@ -629,6 +638,10 @@ def parameter_refusal(model_type, parameters, dataset=None):
     a choice a `multiclass` rule forbids does so."""
     if not isinstance(parameters, dict):
         return {"error": "parameters must be an object"}
+    if "monitoring" in parameters:
+        refusal = monitoring_refusal(parameters["monitoring"])
+        if refusal:
+            return refusal
 
     info = AVAILABLE_MODELS[model_category_for(model_type)][model_type]
     fields = info["parameters"]
@@ -1381,13 +1394,16 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
         db.session.rollback()  # release the model row lock
         return refusal, 400
 
+    # The monitoring the run uses, the host's defaults filled in (BAIGLE #89).
+    monitoring = run_monitoring(current_app.config, model.parameters)
+
     # Create training job
     # The settings snapshot is what Previous runs compares (BAIGLE #83).
     training_job = TrainingJob(
         owner_id=owner_id,
         model_id=model_id,
         status="pending",
-        parameters=effective_parameters(model.model_type, model.parameters),
+        parameters=effective_parameters(model.model_type, model.parameters) | {"monitoring": monitoring},
     )
     db.session.add(training_job)
     if al_round_id:
@@ -1410,6 +1426,7 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
             "dataset_id": str(dataset.id),
             "model_type": model.model_type,
             "parameters": model.parameters,
+            "monitoring": monitoring,
             "dataset_path": dataset.file_path,
             "task_type": dataset.task_type,
             "preprocessing_options": data.get("preprocessing_options", {}),
