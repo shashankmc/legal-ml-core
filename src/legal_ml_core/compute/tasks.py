@@ -97,6 +97,41 @@ def _job_left_active_in_db(job_id):
     return status not in ACTIVE_JOB_STATUSES
 
 
+def _with_kept_group_names(model, job_id, metrics):
+    """Fresh metrics, plus the group names the user gave the last run when this
+    run used the same settings. Group numbers do not carry over between settings,
+    so changed settings drop them.
+
+    Settings compare with the catalogue defaults filled in, so an older snapshot
+    of only some settings matches the form's full copy of the same choices. A
+    run from before snapshots has no record of its settings, and the Model may
+    have been edited since, so its names are dropped too: names on the wrong
+    groups are worse than lost names."""
+    # Here, not at the top: routes.models imports the training code's siblings.
+    from ..routes.models import effective_parameters
+
+    names = (model.metrics or {}).get("display_labels")
+    if not names:
+        return metrics
+    job = db.session.get(TrainingJob, job_id)
+    previous = (
+        TrainingJob.query.filter(
+            TrainingJob.model_id == model.id,
+            TrainingJob.status == "completed",
+            TrainingJob.id != job_id,
+        )
+        .order_by(TrainingJob.completed_at.desc())
+        .first()
+    )
+    if job is None or previous is None or previous.parameters is None:
+        return metrics
+    if effective_parameters(model.model_type, job.parameters) != effective_parameters(
+        model.model_type, previous.parameters
+    ):
+        return metrics
+    return {**metrics, "display_labels": names}
+
+
 def _chosen_parameters(task_info):
     """The flat parameters the trainer reads: the Model's choices, nested under
     "parameters" in the queue message. The server's own values go last, so a
@@ -249,7 +284,7 @@ def process_training_task(
 
         model = db.session.get(Model, model_id)
         if model:
-            model.metrics = metrics
+            model.metrics = _with_kept_group_names(model, job_id, metrics)
             model.file_path = model_path
         db.session.commit()
         metric_logger.log("model_saved", 1.0)

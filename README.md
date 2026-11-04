@@ -103,6 +103,24 @@ app.config["LLM_ENCRYPTION_KEY"] = os.environ["LLM_ENCRYPTION_KEY"]  # Fernet ke
 
 Other settings and defaults are in `llm/config.py`.
 
+## Installing
+
+The API and the worker need different installs. The worker trains, predicts and
+explains, which needs torch, transformers, shap, lime and nltk; the API does not.
+
+```bash
+# API process
+pip install "legal-ml-core @ git+https://github.com/shashankmc/legal-ml-core.git@<tag>"
+
+# Worker process: CPU torch first, or PyPI serves the CUDA build, several GB larger
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install "legal-ml-core[compute] @ git+https://github.com/shashankmc/legal-ml-core.git@<tag>"
+```
+
+Importing `legal_ml_core` or mounting it with `init_ml_feature` never loads the
+training stack. `run_ml_worker` loads it on first use, and raises
+`ModuleNotFoundError` where the `[compute]` extra is missing.
+
 ## Installing into a host Flask app
 
 A host that has its own models owns the `SQLAlchemy` handle, built on this
@@ -210,6 +228,8 @@ models. Rebuild all of them (in BAIGLE, `docker compose build` with no service
 argument).
 
 ## Running the worker
+
+Install the package with its `[compute]` extra wherever this runs (see Installing).
 
 ```python
 from legal_ml_core import run_ml_worker

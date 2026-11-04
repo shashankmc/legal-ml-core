@@ -86,3 +86,42 @@ def test_eda_route_answers_valid_json_for_a_column_with_no_values(client, auth_h
     assert resp.status_code == 200
     body = json.loads(resp.get_data(as_text=True), parse_constant=_refuse)
     assert body["column_analysis"]["label"]["mean"] is None
+
+
+_KEYWORD_TEXTS = pd.DataFrame(
+    {
+        "text": [
+            "Contract breach damages",
+            "contract breach notice",
+            "contract renewal",
+            "tenant eviction notice",
+            "tenant rent arrears",
+            "tenant deposit",
+        ],
+        "label": ["contract", "contract", "contract", "tenancy", "tenancy", "tenancy"],
+    }
+)
+
+
+def test_keyword_stats_count_the_texts_behind_each_distinctive_term():
+    """Each term carries texts in its class, texts overall and lift, ordered
+    by lift, then count in the class, then the term itself."""
+    analysis = perform_eda_analysis(_KEYWORD_TEXTS.copy(), "classification")
+    stats = analysis["task_specific_analysis"]["keyword_stats"]
+
+    assert stats["contract"] == [
+        {"term": "contract", "in_class": 3, "overall": 3, "lift": 2.0},
+        {"term": "breach", "in_class": 2, "overall": 2, "lift": 2.0},
+    ]
+    assert stats["tenancy"] == [
+        {"term": "tenant", "in_class": 3, "overall": 3, "lift": 2.0},
+    ]
+
+
+def test_the_distinctive_terms_list_keeps_its_shape_beside_the_counts():
+    analysis = perform_eda_analysis(_KEYWORD_TEXTS.copy(), "classification")
+
+    assert analysis["task_specific_analysis"]["keywords_by_class"] == {
+        "contract": ["contract", "breach"],
+        "tenancy": ["tenant"],
+    }

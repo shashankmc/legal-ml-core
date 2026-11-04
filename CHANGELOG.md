@@ -8,6 +8,46 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Each training job records `parameters`, the Model's settings when the run
+  started, so retraining no longer loses what an earlier run used. Jobs from
+  before this release have `parameters: null`.
+- `GET /api/models/<id>/runs` lists a Model's runs newest first, owner-scoped,
+  with `parameters`, the headline `scores`, `status`, `error_message` and dates.
+  It lists at most 50, and `has_more` says whether older runs exist.
+- Migration `lmc_0005_training_job_parameters` adds `training_jobs.parameters`.
+  Hosts with their own Alembic graph need a merge revision.
+- EDA for Text Classification adds `keyword_stats` beside `keywords_by_class`: each
+  distinctive term with `in_class` (texts in the class that contain it), `overall`
+  (texts that contain it) and `lift`. `keywords_by_class` keeps its shape.
+- `GET /api/datasets/<id>/rows` takes `term` and `label` to show only the texts behind
+  a distinctive term. `total_rows` and `has_more` then count the filtered rows, and the
+  count matches `in_class`.
+
+### Changed
+
+- Distinctive terms that tie on lift are ordered by how many texts in the class contain
+  them, then alphabetically, so the order no longer changes between requests.
+- `PUT /api/models/<id>` refuses a change of `parameters` with a 409 while the
+  Model has a pending or running job. A rename, or the same parameters, still
+  goes through.
+- A successful retrain keeps the group names saved with `PUT
+  /api/models/<id>/labels` (`metrics.display_labels`) only when the run used the
+  same parameters as the run before it. Before, every retrain dropped them. A run
+  from before `parameters` were recorded counts as different, so its names go.
+- Run `parameters` hold the catalogue defaults as well as the Model's choices, and
+  runs and the training guard compare parameters that way. A Model saved with some
+  settings, then saved again by a form that sends them all, is not a change.
+
+- **Breaking for hosts:** the worker's training stack (transformers with torch,
+  accelerate, spaCy, NLTK, LIME and SHAP) moved to the `[compute]` extra. Install
+  `legal-ml-core[compute]` wherever `run_ml_worker` runs. The API process needs
+  only `legal-ml-core`, so an API image no longer carries torch. With PyPI's
+  CUDA build, that was several GB.
+- `run_ml_worker` is imported on first use, so `import legal_ml_core` and
+  `init_ml_feature` no longer load the training stack.
+
 ## [0.5.2] - 2026-10-31
 
 ### Added

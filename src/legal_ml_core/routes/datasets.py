@@ -4,6 +4,14 @@ from werkzeug.utils import secure_filename
 from ..db import db
 from ..annotation_queue import record_rows_to_label
 from ..models import Dataset
+from ..text_terms import (
+    LABEL_COL_NAMES,
+    TEXT_COL_NAMES,
+    find_column,
+    label_values,
+    text_values,
+    texts_containing,
+)
 import pandas as pd
 import os
 import uuid
@@ -463,6 +471,21 @@ def paginated_dataset_rows(dataset_id):
             df = pd.read_json(dataset.file_path)
         else:
             return jsonify({"error": "Unsupported file format"}), 400
+
+        # Optional filters for opening a distinctive term from EDA. They match
+        # the way EDA counts texts, so the filtered total equals `in_class`.
+        term = request.args.get("term", default="", type=str).strip()
+        label = request.args.get("label", default=None, type=str)
+        if term:
+            text_col = find_column(df, TEXT_COL_NAMES)
+            if text_col is None:
+                return jsonify({"error": "This Dataset has no text column to search"}), 400
+            df = df[texts_containing(text_values(df, text_col), term).to_numpy()]
+        if label is not None:
+            label_col = find_column(df, LABEL_COL_NAMES)
+            if label_col is None:
+                return jsonify({"error": "This Dataset has no label column to filter by"}), 400
+            df = df[(label_values(df, label_col) == label).to_numpy()]
 
         total = len(df)
         window = df.iloc[offset : offset + limit]

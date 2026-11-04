@@ -34,7 +34,17 @@ from .ownership import (
     OwnerRef,
     owner_ref,
 )
-from .worker import run_ml_worker
+
+# The worker imports the training stack (torch, transformers, shap, lime, nltk),
+# which only `legal-ml-core[compute]` installs. Loading it on first use keeps
+# `import legal_ml_core` cheap for an API process without that extra.
+def __getattr__(name):
+    if name == "run_ml_worker":
+        from .worker import run_ml_worker
+
+        return run_ml_worker
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "AuthError",

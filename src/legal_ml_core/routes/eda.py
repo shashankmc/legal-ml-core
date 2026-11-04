@@ -5,6 +5,14 @@ import json
 from flask import Blueprint, jsonify
 from ..auth import jwt_required, get_jwt_identity
 from ..models import Dataset
+from ..text_terms import (
+    LABEL_COL_NAMES,
+    TEXT_COL_NAMES,
+    find_column,
+    keyword_vectorizer,
+    label_values,
+    text_values,
+)
 import os
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
@@ -395,11 +403,7 @@ def get_classification_analysis(df):
     analysis = {}
 
     # Find label column
-    label_col = None
-    for col in df.columns:
-        if col.lower() in ["label", "labels", "class", "category", "target"]:
-            label_col = col
-            break
+    label_col = find_column(df, LABEL_COL_NAMES)
 
     if label_col:
         try:
@@ -418,11 +422,7 @@ def get_classification_analysis(df):
             analysis["class_balance"] = {"balanced": True, "imbalance_ratio": 1}
 
         # Find text column
-        text_col = None
-        for col in df.columns:
-            if col.lower() in ["text", "content", "document", "sentence"]:
-                text_col = col
-                break
+        text_col = find_column(df, TEXT_COL_NAMES)
 
         if text_col:
             # Text length analysis by class
@@ -441,59 +441,70 @@ def get_classification_analysis(df):
             # Most distinctive terms per class: the words that appear in a
             # class far more often than elsewhere, so a user can see what each
             # label actually captures ("interactive keywords per class").
+            # `keyword_stats` adds the counts behind each term; the plain list
+            # stays for readers that only know `keywords_by_class`.
             try:
-                analysis["keywords_by_class"] = _keywords_by_class(
-                    df, text_col, label_col
-                )
+                stats = _keyword_stats(df, text_col, label_col)
             except Exception as e:
                 print(f"Error in keyword analysis: {e}")
-                analysis["keywords_by_class"] = {}
+                stats = {}
+            analysis["keyword_stats"] = stats
+            analysis["keywords_by_class"] = {
+                label: [entry["term"] for entry in entries]
+                for label, entries in stats.items()
+            }
 
     return analysis
 
 
-def _keywords_by_class(df, text_col, label_col, top_n=10):
-    """Return {class: [word, ...]} of terms over-represented in each class.
+def _keyword_stats(df, text_col, label_col, top_n=10):
+    """Return {class: [{term, in_class, overall, lift}, ...]} of terms
+    over-represented in each class.
 
-    Uses a per-class document frequency ratio against the class's overall share,
-    which needs no extra dependencies and is stable on small legal datasets.
+    `in_class` and `overall` count texts, not occurrences. Lift is the class's
+    share of texts with the term over the share across all texts, which needs
+    no extra dependencies and is stable on small legal datasets. Ordered by
+    lift, then `in_class`, then term, so ties come out the same every time.
     """
-    from sklearn.feature_extraction.text import CountVectorizer
-
-    vectorizer = CountVectorizer(
-        stop_words="english", ngram_range=(1, 1), max_features=2000, binary=True
-    )
-    texts = df[text_col].astype(str).fillna("")
+    vectorizer = keyword_vectorizer()
     try:
-        matrix = vectorizer.fit_transform(texts)
+        matrix = vectorizer.fit_transform(text_values(df, text_col))
     except ValueError:
         return {}
 
     terms = vectorizer.get_feature_names_out()
-    labels = df[label_col].astype(str)
+    labels = label_values(df, label_col)
     total_docs = len(labels)
     if total_docs == 0:
         return {}
 
+    overall = matrix.sum(axis=0).A1  # texts overall containing term
     result = {}
     for label in labels.unique():
         mask = (labels == label).to_numpy()
         class_docs = int(mask.sum())
         if class_docs == 0:
             continue
-        present = matrix[mask].sum(axis=0).A1  # docs in class containing term
-        overall = matrix.sum(axis=0).A1  # docs overall containing term
+        present = matrix[mask].sum(axis=0).A1  # texts in class containing term
         with np.errstate(divide="ignore", invalid="ignore"):
             class_rate = present / class_docs
             overall_rate = overall / total_docs
             lift = np.where(overall_rate > 0, class_rate / overall_rate, 0)
-        top_idx = np.argsort(lift)[::-1]
-        keywords = [
-            terms[i]
-            for i in top_idx
+        keep = [
+            i
+            for i in range(len(terms))
             if present[i] >= max(2, int(0.1 * class_docs)) and lift[i] > 1.0
-        ][:top_n]
-        result[str(label)] = keywords
+        ]
+        keep.sort(key=lambda i: (-lift[i], -present[i], terms[i]))
+        result[str(label)] = [
+            {
+                "term": str(terms[i]),
+                "in_class": int(present[i]),
+                "overall": int(overall[i]),
+                "lift": float(lift[i]),
+            }
+            for i in keep[:top_n]
+        ]
     return result
 
 
@@ -824,11 +835,7 @@ def create_classification_visualizations(df):
     visualizations = {}
 
     # Find label column
-    label_col = None
-    for col in df.columns:
-        if col.lower() in ["label", "labels", "class", "category", "target"]:
-            label_col = col
-            break
+    label_col = find_column(df, LABEL_COL_NAMES)
 
     if label_col:
         # Class distribution
@@ -847,11 +854,7 @@ def create_classification_visualizations(df):
         visualizations["class_distribution"] = json.dumps(fig, cls=PlotlyJSONEncoder)
 
         # Find text column for length analysis
-        text_col = None
-        for col in df.columns:
-            if col.lower() in ["text", "content", "document", "sentence"]:
-                text_col = col
-                break
+        text_col = find_column(df, TEXT_COL_NAMES)
 
         if text_col:
             # Text length by class. Box plots encode the middle 50% as the box
