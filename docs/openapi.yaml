@@ -270,7 +270,9 @@ paths:
             and their options or min and max, and
             optional rules: when `when` holds, `parameter` is limited to
             `options`, and `reason` says why. `multiclass` in `when` means a
-            Dataset of more than two labels.
+            Dataset of more than two labels. `supports_learning_curve` says whether a
+            run of the model type can record a learning curve
+            (`monitoring.learning_curve`).
           content:
             application/json:
               schema:
@@ -313,7 +315,11 @@ paths:
                 name: { type: string }
                 dataset_id: { type: string }
                 model_type: { type: string, examples: [svm, random_forest, legalbert, kmeans, lda] }
-                parameters: { type: object }
+                parameters:
+                  type: object
+                  description: The model's settings, by catalogue name, plus an optional `monitoring`.
+                  properties:
+                    monitoring: { $ref: "#/components/schemas/Monitoring" }
                 project_id: { type: string }
       responses:
         "201":
@@ -389,7 +395,11 @@ paths:
               type: object
               properties:
                 name: { type: string }
-                parameters: { type: object }
+                parameters:
+                  type: object
+                  description: The model's settings, by catalogue name, plus an optional `monitoring`.
+                  properties:
+                    monitoring: { $ref: "#/components/schemas/Monitoring" }
       responses:
         "200":
           description: Updated model
@@ -1651,7 +1661,10 @@ components:
         progress: { type: [number, "null"] }
         parameters:
           type: [object, "null"]
-          description: The model's parameters when the run started, catalogue defaults filled in; null for older runs.
+          description: >-
+            The model's parameters when the run started, catalogue defaults filled in; null
+            for older runs. Runs from this release on add `monitoring`, the monitoring the
+            run used, with the host's and the package's defaults filled in.
         metrics: { type: [object, "null"] }
         error_message: { type: [string, "null"] }
         status_message:
@@ -1667,7 +1680,10 @@ components:
         status: { type: string, enum: [pending, running, completed, failed, cancelled] }
         parameters:
           type: [object, "null"]
-          description: The model's parameters when the run started, catalogue defaults filled in; null for older runs.
+          description: >-
+            The model's parameters when the run started, catalogue defaults filled in; null
+            for older runs. Runs from this release on add `monitoring`, the monitoring the
+            run used, with the host's and the package's defaults filled in.
         scores:
           type: object
           description: >-
@@ -1678,14 +1694,61 @@ components:
         created_at: { type: string, format: date-time }
         started_at: { type: [string, "null"], format: date-time }
         completed_at: { type: [string, "null"], format: date-time }
+    Monitoring:
+      type: object
+      additionalProperties: false
+      description: >-
+        How a run is monitored. Each setting left out takes the host's default
+        (`LEGAL_ML_MONITORING`), else the package's. A bad value is refused with a 400
+        whose `field` is `monitoring.<setting>`.
+      properties:
+        log_every_n_steps: { type: integer, minimum: 1, default: 10, description: How often fine-tuning logs, in steps. }
+        eval_strategy: { type: string, enum: [epoch, steps], default: epoch, description: When fine-tuning evaluates. }
+        eval_steps: { type: integer, minimum: 1, default: 100, description: How often fine-tuning evaluates, in steps, when eval_strategy is steps. }
+        include:
+          type: array
+          items: { type: string }
+          default: ["*"]
+          description: Name globs; a point is stored when it matches one and no exclude. Stage markers are always stored.
+        exclude: { type: array, items: { type: string }, default: [], description: Name globs of points not to store. }
+        learning_curve: { type: boolean, default: false, description: "Classical Text Classification algorithms also store learning_curve_* points against training-set size, and logistic regression its loss by iteration. Makes training slower." }
+        system_metrics: { type: boolean, default: false, description: "Record system points: memory_mb, gpu_memory_mb and gpu_use_percent when there is a GPU, samples_per_second and seconds_remaining. Every log_every_n_steps when fine-tuning, at each stage otherwise." }
+        flush_every_points: { type: integer, minimum: 1, default: 50, description: The worker writes waiting metric points once this many are waiting. }
+        flush_every_seconds: { type: number, exclusiveMinimum: 0, default: 2.0, description: The worker writes waiting metric points once the oldest has waited this many seconds. }
     TrainingMetricPoint:
       type: object
       properties:
         id: { type: string }
         training_job_id: { type: string }
-        step: { type: integer }
+        step:
+          type: integer
+          description: Write counter and polling cursor, not the trainer's step.
         epoch: { type: [number, "null"] }
+        training_step:
+          type: [integer, "null"]
+          description: The trainer's own step for fine-tuning, the iteration for loss by iteration, and the training-set size for `learning_curve_*` points.
         metric_name: { type: string }
+        group:
+          type: string
+          enum: [train, eval, system, stage]
+          description: >-
+            Which chart the point belongs on. Older points without one
+            get one from their name: `eval_*` is eval, the run's milestones
+            are stage, and the rest are train.
+        x_kind:
+          type: string
+          enum: [step, iteration, training_examples]
+          description: >-
+            What `training_step` counts, for the x-axis title: the trainer's
+            steps, logistic regression's iterations (loss by iteration), or
+            training examples (`learning_curve_*` points). Worked out from the
+            stored point, so older points have one too.
+        unit:
+          type: [string, "null"]
+          description: >-
+            A system point's unit, from the end of its name: `MB` (`*_mb`), `%`
+            (`*_percent`), `samples/s` (`samples_per_second`) or `s`
+            (`seconds_remaining`). Null for every other point.
         value: { type: number }
         created_at: { type: string, format: date-time }
     ModelComparison:

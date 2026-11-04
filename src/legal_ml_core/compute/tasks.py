@@ -1,20 +1,25 @@
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 import joblib
 import pandas as pd
 import redis as redis_lib
+from flask import current_app
 
 from ..active_learning.scoring import queue_pool_scoring, verify_finished_model
 from ..annotation_queue import apply_saved_annotations
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, transition
+from ..metric_groups import metric_group_for
 from ..models import Dataset, Model, TrainingJob, TrainingMetricPoint
+from ..monitoring import FilteredMetricLogger, run_monitoring
 from ..liveness import DEFAULT_TIMINGS, Heartbeat
 from ..queue_contract import JOB_STATUS_TTL_SECONDS, is_cancel_requested, job_status_key
 from ..storage import get_storage_backend
+from ..system_metrics import log_system_readings
 from .explain import generate_lime_explanation, generate_shap_explanation
 from .trainer import MLModelTrainer, TrainingCancelled
 
@@ -29,29 +34,63 @@ class MetricLogger:
 
     `step` is a per-instance monotonically increasing polling cursor (used only
     by the `/training/<job_id>/metrics?since_step=` endpoint) — it is NOT the
-    algorithm's own notion of step/epoch. The semantic x-axis for charts is
-    `epoch`, which is populated for the HuggingFace Trainer path (via
-    TrainingMetricCallback) and left None for the classical sklearn algorithms'
-    coarse phase markers.
+    algorithm's own notion of step/epoch. The semantic x-axes for charts are
+    `training_step` and `epoch`, which are populated for the HuggingFace Trainer
+    path (via TrainingMetricCallback) and left None for the classical sklearn
+    algorithms' coarse phase markers.
+
+    `group` is one of metric_groups.METRIC_GROUPS; left out, it is derived from
+    the name.
+
+    Points are buffered and written in one commit once `flush_every_points`
+    are waiting or the oldest has waited `flush_every_seconds` (checked when a
+    point is logged), and at once for a stage marker. Callers `flush()` when a
+    run ends. A failed write keeps the batch, so the cursor has no gaps.
     """
 
-    def __init__(self, training_job_id):
+    def __init__(
+        self, training_job_id, flush_every_points=50, flush_every_seconds=2.0, clock=time.monotonic
+    ):
         self.training_job_id = training_job_id
         self._counter = 0
+        self._flush_every_points = flush_every_points
+        self._flush_every_seconds = flush_every_seconds
+        self._clock = clock
+        self._buffer = []
+        self._oldest_buffered_at = None
 
-    def log(self, metric_name, value, epoch=None):
+    def log(self, metric_name, value, epoch=None, training_step=None, group=None):
         step = self._counter
         self._counter += 1
-        point = TrainingMetricPoint(
-            training_job_id=self.training_job_id,
-            step=step,
-            epoch=epoch,
-            metric_name=metric_name,
-            value=float(value),
+        if not self._buffer:
+            self._oldest_buffered_at = self._clock()
+        group = group or metric_group_for(metric_name)
+        self._buffer.append(
+            dict(
+                training_job_id=self.training_job_id,
+                step=step,
+                epoch=epoch,
+                training_step=training_step,
+                metric_name=metric_name,
+                metric_group=group,
+                value=float(value),
+            )
         )
-        db.session.add(point)
-        db.session.commit()
+        if (
+            group == "stage"
+            or len(self._buffer) >= self._flush_every_points
+            or self._clock() - self._oldest_buffered_at >= self._flush_every_seconds
+        ):
+            self.flush()
         return step
+
+    def flush(self):
+        """Write the buffered points in one commit."""
+        if not self._buffer:
+            return
+        db.session.add_all(TrainingMetricPoint(**point) for point in self._buffer)
+        db.session.commit()
+        self._buffer = []
 
 
 def _mark_running(job_id):
@@ -106,7 +145,7 @@ def _with_kept_group_names(model, job_id, metrics):
     of only some settings matches the form's full copy of the same choices. A
     run from before snapshots has no record of its settings, and the Model may
     have been edited since, so its names are dropped too: names on the wrong
-    groups are worse than lost names."""
+    groups are worse than lost names. Monitoring settings do not count."""
     # Here, not at the top: routes.models imports the training code's siblings.
     from ..routes.models import effective_parameters
 
@@ -125,20 +164,35 @@ def _with_kept_group_names(model, job_id, metrics):
     )
     if job is None or previous is None or previous.parameters is None:
         return metrics
-    if effective_parameters(model.model_type, job.parameters) != effective_parameters(
-        model.model_type, previous.parameters
+    if _learning_settings(effective_parameters(model.model_type, job.parameters)) != _learning_settings(
+        effective_parameters(model.model_type, previous.parameters)
     ):
         return metrics
     return {**metrics, "display_labels": names}
 
 
-def _chosen_parameters(task_info):
+def _learning_settings(parameters):
+    """The settings that change what a run learns. Monitoring only changes what
+    is watched, and runs from before it was recorded have none."""
+    return {name: value for name, value in parameters.items() if name != "monitoring"}
+
+
+def _monitoring(task_info):
+    """The run's monitoring, as the API recorded it. A message queued before
+    monitoring settings existed gets this worker's defaults."""
+    if task_info.get("monitoring"):
+        return task_info["monitoring"]
+    return run_monitoring(current_app.config, task_info.get("parameters"))
+
+
+def _chosen_parameters(task_info, monitoring):
     """The flat parameters the trainer reads: the Model's choices, nested under
     "parameters" in the queue message. The server's own values go last, so a
     stored parameter can never replace them."""
     parameters = dict(task_info.get("parameters") or {})
     parameters.setdefault("random_state", task_info.get("random_state", 42))
     parameters["model_id"] = task_info["model_id"]
+    parameters["monitoring"] = monitoring
     return parameters
 
 
@@ -165,7 +219,15 @@ def process_training_task(
     """
     job_id = task_info["job_id"]
     model_id = task_info["model_id"]
-    metric_logger = MetricLogger(job_id)
+    monitoring = _monitoring(task_info)
+    metric_logger = FilteredMetricLogger(
+        MetricLogger(
+            job_id,
+            flush_every_points=monitoring["flush_every_points"],
+            flush_every_seconds=monitoring["flush_every_seconds"],
+        ),
+        monitoring,
+    )
 
     def cancel_requested():
         """Stop check: the Redis flag (cheap, set by /stop), else the DB row,
@@ -190,6 +252,13 @@ def process_training_task(
     def set_live(payload):
         _write_live(redis_client, job_id, payload, liveness.status_ttl)
 
+    def reached(stage):
+        """Log a stage marker, then the resource readings there when the run
+        takes them (BAIGLE #94)."""
+        metric_logger.log(stage, 1.0)
+        if monitoring.get("system_metrics"):
+            log_system_readings(metric_logger)
+
     model_path = None
     heartbeat = None
     try:
@@ -205,7 +274,7 @@ def process_training_task(
         heartbeat = heartbeat_factory(redis_client, job_id, liveness).start()
 
         set_live({"status": "running", "progress": 0})
-        metric_logger.log("preprocessing_started", 1.0)
+        reached("preprocessing_started")
 
         # Load dataset
         df = pd.read_csv(task_info["dataset_path"])
@@ -225,11 +294,11 @@ def process_training_task(
         checkpoint()
 
         set_live({"status": "running", "progress": 25})
-        metric_logger.log("preprocessing_done", 1.0)
-        metric_logger.log("training_started", 1.0)
+        reached("preprocessing_done")
+        reached("training_started")
 
         # Train model based on task type
-        parameters = _chosen_parameters(task_info)
+        parameters = _chosen_parameters(task_info, monitoring)
         if task_info["model_type"] in ["legalbert", "roberta"]:
             parameters["output_dir"] = get_storage_backend().get_transformer_output_dir(
                 model_storage_path, model_id
@@ -261,7 +330,7 @@ def process_training_task(
         checkpoint()
 
         set_live({"status": "running", "progress": 75})
-        metric_logger.log("training_done", 1.0)
+        reached("training_done")
 
         # Save model
         model_path = get_storage_backend().get_model_path(model_storage_path, model_id)
@@ -287,7 +356,8 @@ def process_training_task(
             model.metrics = _with_kept_group_names(model, job_id, metrics)
             model.file_path = model_path
         db.session.commit()
-        metric_logger.log("model_saved", 1.0)
+        reached("model_saved")
+        _call_swallowing_errors_with_rollback(metric_logger.flush)
 
         set_live(
             {
@@ -319,6 +389,7 @@ def process_training_task(
 
         _discard_model_file(model_path)
         _call_swallowing_errors_with_rollback(lambda: metric_logger.log("training_failed", 1.0))
+        _call_swallowing_errors_with_rollback(metric_logger.flush)
         if isinstance(e, REDIS_DOWN_ERRORS):
             # Infrastructure, not the user's data: never show raw Redis text.
             error_message = COULD_NOT_START_MESSAGE
@@ -345,6 +416,8 @@ def process_training_task(
         ):
             set_live({"status": "failed", "error": error_message})
     finally:
+        # Any points still batched, however the run ended (a stop included).
+        _call_swallowing_errors_with_rollback(metric_logger.flush)
         if heartbeat is not None:
             heartbeat.stop()
 

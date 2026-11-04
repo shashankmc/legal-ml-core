@@ -45,6 +45,10 @@ def init_ml_feature(app, redis_client, model_storage_path, db=None):
 
     validate_host_config(app.config)
 
+    from .monitoring import validate_host_monitoring
+
+    validate_host_monitoring(app.config)
+
     from .routes.active_learning import active_learning_bp
     from .routes.annotation import annotation_bp
     from .routes.datasets import datasets_bp

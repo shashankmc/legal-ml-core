@@ -1,12 +1,16 @@
 import json
+import time
+import warnings
 
 import joblib
 import numpy as np
+from sklearn.base import clone
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.decomposition import NMF, LatentDirichletAllocation
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_distances
 from sklearn.metrics import (
@@ -14,6 +18,7 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     f1_score,
+    log_loss,
     precision_score,
     recall_score,
     silhouette_score,
@@ -25,6 +30,8 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from transformers import TrainerCallback
 
+from ..monitoring import effective_monitoring
+from ..system_metrics import log_system_readings
 from .preprocessing import TextPreprocessor
 
 
@@ -37,7 +44,8 @@ class TrainingMetricCallback(TrainerCallback):
     LegalBERT/RoBERTa path genuine per-step training curves (loss, eval_accuracy,
     etc.) — unlike the classical sklearn algorithms below, which fit synchronously
     with no epoch loop and only get coarse phase markers (logged by the caller in
-    legal_ml_core.compute.tasks, not here).
+    legal_ml_core.compute.tasks, not here), plus a learning curve when the run
+    asks for one.
     """
 
     def __init__(self, metric_logger):
@@ -47,13 +55,60 @@ class TrainingMetricCallback(TrainerCallback):
         if not logs or not self.metric_logger:
             return
         for key, value in logs.items():
-            if isinstance(value, (int, float)):
-                self.metric_logger.log(metric_name=key, value=value, epoch=state.epoch)
+            if isinstance(value, (int, float)) and not _is_summary_value(key):
+                self.metric_logger.log(
+                    metric_name=key,
+                    value=value,
+                    epoch=state.epoch,
+                    training_step=state.global_step,
+                )
+
+
+# The Trainer's end-of-run totals, plus `epoch`, which every point already
+# carries as its x value. Stored as points they would share a chart with the
+# curves at wildly different scales (total_flos is about 1e14).
+_SUMMARY_VALUES = frozenset({"total_flos", "train_runtime", "train_loss", "epoch"})
+
+
+def _is_summary_value(key):
+    return key in _SUMMARY_VALUES or key.endswith("_per_second")
+
+
+class SystemMetricsCallback(TrainerCallback):
+    """Takes the resource readings at each logging step (BAIGLE #94), with how
+    many samples a second the run has averaged since it began and how long the
+    steps left would take at that rate."""
+
+    def __init__(self, metric_logger, clock=time.monotonic):
+        self.metric_logger = metric_logger
+        self._clock = clock
+        self._began = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._began = (self._clock(), state.global_step)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % args.logging_steps:
+            return
+        point = {"epoch": state.epoch, "training_step": state.global_step}
+        log_system_readings(self.metric_logger, **point)
+        if self._began is None:
+            self._began = (self._clock(), state.global_step)
+            return
+        began_at, began_step = self._began
+        seconds, steps = self._clock() - began_at, state.global_step - began_step
+        if seconds <= 0 or steps <= 0:
+            return
+        samples_per_step = args.train_batch_size * args.gradient_accumulation_steps
+        self.metric_logger.log("samples_per_second", steps * samples_per_step / seconds, group="system", **point)
+        if state.max_steps > state.global_step:
+            seconds_left = (state.max_steps - state.global_step) * seconds / steps
+            self.metric_logger.log("seconds_remaining", seconds_left, group="system", **point)
 
 
 class TrainingCancelCallback(TrainerCallback):
     """Ends HF training at the first step boundary after a Stop request, i.e.
-    well within one logging step (logging_steps=10). Polled every step: one
+    well within one logging step (log_every_n_steps). Polled every step: one
     Redis EXISTS per optimizer step is negligible next to a forward/backward
     pass."""
 
@@ -66,6 +121,18 @@ class TrainingCancelCallback(TrainerCallback):
             self.cancelled = True
             control.should_training_stop = True
         return control
+
+
+def _monitoring(parameters):
+    """The run's monitoring settings. The worker works them out once per run and
+    passes them in; a direct caller that passes none gets the defaults."""
+    return parameters.get("monitoring") or effective_monitoring()
+
+
+# The parts of the training split a learning curve fits on (BAIGLE #93).
+LEARNING_CURVE_FRACTIONS = (0.1, 0.25, 0.5, 0.75, 1.0)
+# At most this many loss points, spread from the first iteration to max_iter.
+LOSS_POINTS = 12
 
 
 class MLModelTrainer:
@@ -221,8 +288,13 @@ class MLModelTrainer:
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
 
+        # Opt-in, as it fits the algorithm several times more (BAIGLE #93).
+        if self.metric_logger and _monitoring(parameters)["learning_curve"]:
+            self._log_learning_curve(self.model, X_train, y_train, X_test, y_test)
+            self._log_loss_by_iteration(self.model, X_train, y_train, X_test, y_test)
+
         # Train model
-        self.model.fit(X_train, y_train)
+        self._timed_fit(lambda: self.model.fit(X_train, y_train), X_train.shape[0], parameters)
 
         # Calibrate probabilities on a held-out split so displayed confidence is
         # closer to a true probability. Not all classifiers expose probabilities
@@ -281,6 +353,75 @@ class MLModelTrainer:
 
         return metrics
 
+    def _timed_fit(self, fit, n_samples, parameters):
+        """Fits the model the run keeps. With resource readings on, logs how
+        many samples a second that fit alone took (BAIGLE #94): not the
+        vectorising, the evaluation or a learning curve's extra fits.
+        Fine-tuning reports its own speed as it goes."""
+        started = time.monotonic()
+        result = fit()
+        seconds = time.monotonic() - started
+        if self.metric_logger and _monitoring(parameters)["system_metrics"] and seconds > 0:
+            self.metric_logger.log("samples_per_second", n_samples / seconds, group="system")
+        return result
+
+    def _stop_if_requested(self):
+        if self.cancel_check and self.cancel_check():
+            raise TrainingCancelled()
+
+    def _log_learning_curve(self, estimator, X_train, y_train, X_test, y_test):
+        """Fits a copy of the estimator on growing parts of the training split
+        and scores it on that part (`train`) and on the evaluation split (`eval`).
+        Each point's training_step is the part's size. The split is already
+        shuffled, so a part is its first rows. A part the algorithm cannot fit,
+        one with a single label say, is left out: the curve never fails the run.
+        Stop is honoured between fits."""
+        n_rows = X_train.shape[0]
+        sizes = sorted({max(1, round(fraction * n_rows)) for fraction in LEARNING_CURVE_FRACTIONS})
+        for size in sizes:
+            self._stop_if_requested()
+            X_part, y_part = X_train[:size], y_train[:size]
+            if len(np.unique(y_part)) < 2:
+                continue
+            try:
+                fitted = clone(estimator).fit(X_part, y_part)
+            except ValueError:
+                continue
+            for group, X, y in (("train", X_part, y_part), ("eval", X_test, y_test)):
+                self.metric_logger.log(
+                    metric_name=f"learning_curve_{group}_accuracy",
+                    value=accuracy_score(y, fitted.predict(X)),
+                    training_step=size,
+                    group=group,
+                )
+
+    def _log_loss_by_iteration(self, estimator, X_train, y_train, X_test, y_test):
+        """For an algorithm that learns over iterations (logistic regression),
+        the loss on the training and evaluation splits after a growing number
+        of them. scikit-learn keeps no history, so each point is a fresh fit
+        stopped after that many iterations, which is the same path the real fit
+        takes. Stops early once a fit converges, and between fits on a Stop."""
+        # SVC's max_iter is -1, for no limit; it learns in one solve.
+        max_iter = getattr(estimator, "max_iter", None)
+        if not isinstance(max_iter, int) or max_iter < 1 or not hasattr(estimator, "predict_proba"):
+            return
+        iterations = np.unique(np.geomspace(1, max_iter, LOSS_POINTS).round().astype(int))
+        for iteration in iterations:
+            self._stop_if_requested()
+            with warnings.catch_warnings():
+                # Stopping before convergence is the point.
+                warnings.simplefilter("ignore", ConvergenceWarning)
+                fitted = clone(estimator).set_params(max_iter=int(iteration)).fit(X_train, y_train)
+            for group, name, X, y in (("train", "loss", X_train, y_train), ("eval", "eval_loss", X_test, y_test)):
+                self.metric_logger.log(
+                    metric_name=name,
+                    value=log_loss(y, fitted.predict_proba(X), labels=fitted.classes_),
+                    training_step=int(iteration),
+                    group=group,
+                )
+            if np.max(fitted.n_iter_) < iteration:
+                return
+
     def train_clustering_model(self, texts, model_type, parameters):
         # Create vectorizer
         vectorizer_params = parameters.get("vectorizer", {})
@@ -328,7 +469,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported clustering model type: {model_type}")
 
         # Train model
-        labels = self.model.fit_predict(points)
+        labels = self._timed_fit(lambda: self.model.fit_predict(points), X.shape[0], parameters)
 
         # Store clustering data for visualization
         embeddings = X.toarray()
@@ -396,7 +537,7 @@ class MLModelTrainer:
             raise ValueError(f"Unsupported topic modeling type: {model_type}")
 
         # Train model
-        self.model.fit(X)
+        self._timed_fit(lambda: self.model.fit(X), X.shape[0], parameters)
         if not self.model.components_.any():
             raise ValueError(
                 "The regularisation (alpha) removed every topic on this Dataset. Choose a smaller alpha."
@@ -487,16 +628,21 @@ class MLModelTrainer:
         output_dir = parameters.get(
             "output_dir", f"/tmp/transformer_{parameters['model_id']}"
         )
+        # How often the run logs and evaluates (BAIGLE #89).
+        monitoring = _monitoring(parameters)
+        evaluation = {"eval_strategy": monitoring["eval_strategy"]}
+        if monitoring["eval_strategy"] == "steps":
+            evaluation["eval_steps"] = monitoring["eval_steps"]
         training_args = TrainingArguments(
             output_dir=output_dir,
             num_train_epochs=epochs,
             per_device_train_batch_size=batch_size,
             per_device_eval_batch_size=batch_size,
             learning_rate=learning_rate,
-            eval_strategy="epoch",
             save_strategy="no",
-            logging_steps=10,
+            logging_steps=monitoring["log_every_n_steps"],
             use_cpu=not torch.cuda.is_available(),
+            **evaluation,
         )
 
         def compute_metrics(eval_pred):
@@ -510,6 +656,8 @@ class MLModelTrainer:
             }
 
         callbacks = [TrainingMetricCallback(self.metric_logger)] if self.metric_logger else []
+        if self.metric_logger and monitoring.get("system_metrics"):
+            callbacks.append(SystemMetricsCallback(self.metric_logger))
         cancel_callback = None
         if self.cancel_check:
             cancel_callback = TrainingCancelCallback(self.cancel_check)

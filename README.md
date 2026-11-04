@@ -258,6 +258,48 @@ own window is `run_ml_worker(liveness=legal_ml_core.liveness.LivenessTimings(sta
 app.config["LEGAL_ML_HEARTBEAT_STALE_SECONDS"] = 120  # default
 ```
 
+## Monitoring settings
+
+Each training run is monitored by the settings under `parameters.monitoring`. A
+setting a run leaves out takes the host's default from `LEGAL_ML_MONITORING`,
+else the package's:
+
+```python
+app.config["LEGAL_ML_MONITORING"] = {
+    "log_every_n_steps": 10,   # how often fine-tuning logs, in steps
+    "eval_strategy": "epoch",  # or "steps", every eval_steps
+    "eval_steps": 100,
+    "include": ["*"],          # name globs of the points to store
+    "exclude": [],             # name globs of the points not to store
+    "learning_curve": False,   # classical classifiers: learning curve, slower
+    "system_metrics": False,   # record memory, GPU, speed and time left
+    "flush_every_points": 50,  # write waiting metric points once this many wait
+    "flush_every_seconds": 2.0,  # or once the oldest has waited this long
+}
+```
+
+Stage markers (`training_started`, `model_saved`, ...) are always stored. A bad
+setting in a run is refused with a 400 whose `field` is `monitoring.<setting>`; a
+bad host default stops `init_ml_feature`. Each run records the settings it used
+under `parameters.monitoring`.
+
+With `learning_curve` on, a classical Text Classification algorithm is also
+fitted on growing parts of its training split (10%, 25%, 50%, 75% and all of
+it). Each fit stores `learning_curve_train_accuracy` (group `train`) and
+`learning_curve_eval_accuracy` (group `eval`), with the part's size as
+`training_step`. Logistic regression also stores `loss` and `eval_loss` after up
+to 12 growing numbers of iterations, with the iteration as `training_step`.
+Training takes several times longer, so it is off by default. A Stop is
+honoured between fits.
+
+With `system_metrics` on, a run records `system` points: `memory_mb` (the worker
+process's memory), `gpu_memory_mb` and `gpu_use_percent` when CUDA is available,
+`samples_per_second` and, for fine-tuning, `seconds_remaining`. Fine-tuning takes
+them every `log_every_n_steps`; a classical run takes them at each stage, and its
+speed over the fit of the model it keeps, in training rows a second. Preparing the
+text, scoring and a learning curve's extra fits are not counted. Memory comes from psutil when it is installed, else from
+the standard library; GPU use needs pynvml.
+
 ## Experiment monitoring limitation
 
 Per-step training curves (`TrainingMetricPoint`, polled via
@@ -267,7 +309,8 @@ epoch/step loop. Classical sklearn algorithms (SVM, decision tree, random
 forest, naive Bayes, logistic regression, KMeans/agglomerative/DBSCAN,
 LDA/NMF) fit synchronously with no epoch loop, so they only get coarse phase
 markers (`preprocessing_started`, `preprocessing_done`, `training_started`,
-`training_done`, `model_saved`). Cross-run hyperparameter-vs-performance
+`training_done`, `model_saved`), unless `monitoring.learning_curve` adds a
+learning curve to a Text Classification run (see Monitoring settings). Cross-run hyperparameter-vs-performance
 comparison (`GET /visualization/parameter-comparison`) works uniformly
 across all model types since it's retrospective, reading already-stored
 `Model.parameters`/`TrainingJob.metrics`.
