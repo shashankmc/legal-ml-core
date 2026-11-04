@@ -26,7 +26,7 @@ def _columns(connection):
 def test_migration_follows_the_run_settings_snapshot():
     module = _migration()
 
-    assert module.revision == "lmc_0006_metric_point_group_and_training_step"
+    assert module.revision == "lmc_0006_metric_point_group"
     assert module.down_revision == "lmc_0005_training_job_parameters"
 
 

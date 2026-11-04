@@ -4,7 +4,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "lmc_0006_metric_point_group_and_training_step"
+revision = "lmc_0006_metric_point_group"
 down_revision = "lmc_0005_training_job_parameters"
 branch_labels = None
 depends_on = None

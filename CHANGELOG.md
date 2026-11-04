@@ -60,7 +60,7 @@ While the version is 0.x, minor releases may contain breaking changes.
   polling cursor. Points stored before this release get a group from their name:
   `eval_*` is eval, the run's milestones (`training_started`, `model_saved`, ...)
   are stage, and the rest are train.
-- Migration `lmc_0006_metric_point_group_and_training_step` adds
+- Migration `lmc_0006_metric_point_group` adds
   `training_metric_points.metric_group` and `training_step`, both nullable. Hosts
   with their own Alembic graph need a merge revision.
 - EDA for Text Classification adds `keyword_stats` beside `keywords_by_class`: each
