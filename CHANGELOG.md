@@ -8,6 +8,18 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- An LLM-suggested first active learning batch: `seed_source: "llm"` on
+  `POST /api/active-learning/datasets/<id>/start`, with `confirm_estimate: true`.
+  The LLM labels three batches' worth of the pool on the worker, never the
+  holdout, and the first batch takes each suggested label in turn, rarest first,
+  so a rare label is in it. `POST .../seed-estimate` prices it beforehand without
+  creating anything, and the loop state's `seed` reports the job.
+  `seed_sources.llm` in the settings is now `true` (BAIGLE #67).
+- `GET /api/llm/status` reports `max_sync_tasks`, the most items one
+  suggestions request may ask for, so a UI need not assume the default.
+
 ## [0.7.0] - 2026-11-05
 
 ### Fixed

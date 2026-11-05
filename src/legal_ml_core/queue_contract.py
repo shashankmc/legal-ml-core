@@ -69,6 +69,11 @@ def explanation_result_key(explanation_id):
     return f"explanation_{explanation_id}"
 
 
+def llm_seed_job_key(dataset_id):
+    """The LLM job choosing this dataset's first active learning batch."""
+    return f"al_seed_job_{dataset_id}"
+
+
 def llm_job_status_key(job_id):
     return f"llm_job_status_{job_id}"
 

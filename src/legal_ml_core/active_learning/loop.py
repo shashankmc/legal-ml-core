@@ -13,6 +13,8 @@ from ..annotation_queue import (
     LLM_LABEL_SOURCES,
     MIN_TO_SPLIT,
     TRAINED_ON_LABELS,
+    _find_column,
+    _rows_needing_label,
     create_annotation_tasks,
     file_labels,
     read_rows,
@@ -50,6 +52,10 @@ class LoopError(Exception):
         super().__init__(message)
         self.message = message
         self.status = status
+
+
+# How many batches' worth of items the LLM labels for an LLM-suggested seed.
+SEED_SAMPLE_FACTOR = 3
 
 
 def allowed_strategies(config=None):
@@ -101,8 +107,7 @@ def settings():
         "cap_batches": _cap_batches(),
         "default_holdout_percent": _host_holdout_percent(),
         "max_holdout_percent": MAX_HOLDOUT_PERCENT,
-        # The LLM seed arrives with LLM assistance in the builder (BAIGLE #67).
-        "seed_sources": {"random": True, "llm": False},
+        "seed_sources": {"random": True, "llm": True},
     }
 
 
@@ -115,6 +120,12 @@ def _checked_strategy(strategy):
 def _checked_positive_int(value, name):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise LoopError(f"{name} must be a whole number above zero.")
+    return value
+
+
+def _checked_holdout_percent(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_HOLDOUT_PERCENT:
+        raise LoopError(f"The held-back share must be between 0 and {MAX_HOLDOUT_PERCENT}%.")
     return value
 
 
@@ -210,22 +221,15 @@ def start_loop(dataset, options):
         raise LoopError("Active learning has already started on this Dataset.", 409)
 
     strategy = _checked_strategy(options.get("strategy") or default_strategy())
-    if options.get("seed_source", "random") == "llm":
-        raise LoopError("LLM-suggested seed batches are not available yet.")
-    if options.get("seed_source", "random") != "random":
+    seed_source = options.get("seed_source", "random")
+    if seed_source not in ("random", "llm"):
         raise LoopError("Choose a random or LLM-suggested seed batch.")
     batch_size = _checked_positive_int(options.get("batch_size", _host_batch_size()), "Batch size")
     min_per_class = _checked_positive_int(options.get("min_per_class", _host_min_per_class()), "Minimum per label")
     if min_per_class < MIN_PER_CLASS:
         raise LoopError(f"Each label needs at least {MIN_PER_CLASS} examples to train on.")
 
-    holdout_percent = options.get("holdout_percent", _host_holdout_percent())
-    if (
-        isinstance(holdout_percent, bool)
-        or not isinstance(holdout_percent, int)
-        or not 0 <= holdout_percent <= MAX_HOLDOUT_PERCENT
-    ):
-        raise LoopError(f"The held-back share must be between 0 and {MAX_HOLDOUT_PERCENT}%.")
+    holdout_percent = _checked_holdout_percent(options.get("holdout_percent", _host_holdout_percent()))
 
     if not dataset.annotation_tasks:
         create_annotation_tasks(dataset)
@@ -248,6 +252,7 @@ def start_loop(dataset, options):
         batch_size=batch_size,
         min_per_class=min_per_class,
         random_seed=seed,
+        seed_source=seed_source,
         holdout_percent=holdout_percent,
         holdout_indices=holdout,
         file_label_counts=_file_label_counts(df, dataset, holdout, held_back=False),
@@ -256,6 +261,69 @@ def start_loop(dataset, options):
     db.session.add(config)
     _shuffle_pool(tasks, seed)
     db.session.add(ALRound(dataset_id=dataset.id, number=0, strategy="random"))
+
+
+def llm_seed_sample(dataset):
+    """The pool items the LLM labels to choose the first batch from: the first
+    ``SEED_SAMPLE_FACTOR`` batches of the random order. Never the holdout."""
+    config = _config_of(dataset)
+    return (
+        AnnotationTask.query.filter_by(dataset_id=dataset.id, is_holdout=False, status="pending")
+        .order_by(AnnotationTask.score.desc())
+        .limit(config.batch_size * SEED_SAMPLE_FACTOR)
+        .all()
+    )
+
+
+def llm_seed_texts(dataset, options):
+    """The texts an LLM seed would send, sampled from the file to price it before
+    the loop starts. Creates nothing."""
+    batch_size = _checked_positive_int(options.get("batch_size", _host_batch_size()), "Batch size")
+    holdout_percent = _checked_holdout_percent(options.get("holdout_percent", _host_holdout_percent()))
+    df = read_rows(dataset.file_path)
+    needs_label = _rows_needing_label(df, dataset)
+    if needs_label is None:
+        raise LoopError("This Dataset has no rows to label.")
+    texts = df[_find_column(df, dataset.text_column or "text")][needs_label].astype(str)
+    pool = len(texts) - round(len(texts) * holdout_percent / 100)
+    return texts.sample(n=min(pool, batch_size * SEED_SAMPLE_FACTOR), random_state=0).tolist()
+
+
+def order_llm_seed(dataset_id, task_ids, batch_size):
+    """Put the LLM-suggested first batch at the front of the queue.
+
+    Taken round-robin from the suggested labels, rarest first, so a rare label
+    is in the first batch. Items keep their random order within a label, and
+    unsuggested items keep their place after the batch. Caller commits.
+    """
+    tasks = (
+        AnnotationTask.query.filter(
+            AnnotationTask.dataset_id == dataset_id,
+            AnnotationTask.id.in_(task_ids),
+            AnnotationTask.status == "pending",
+            AnnotationTask.is_holdout.is_(False),
+        )
+        .order_by(AnnotationTask.score.desc())
+        .all()
+    )
+    suggested = {
+        suggestion.task_id: suggestion.label
+        for suggestion in LLMSuggestion.query.filter(LLMSuggestion.task_id.in_([task.id for task in tasks]))
+        .order_by(LLMSuggestion.created_at)
+    }
+    by_label = {}
+    for task in tasks:
+        if task.id in suggested:
+            by_label.setdefault(suggested[task.id], []).append(task)
+    queues = sorted(by_label.values(), key=len)
+    picked = []
+    while len(picked) < batch_size and any(queues):
+        for queue in queues:
+            if queue and len(picked) < batch_size:
+                picked.append(queue.pop(0))
+    # Random scores are below 1, so these come first, in this order.
+    for rank, task in enumerate(picked):
+        task.score = 2.0 - rank / batch_size
 
 
 def set_strategy(dataset, strategy):
@@ -444,7 +512,22 @@ def loop_state(dataset):
         "typed_labels": not dataset.labels,
         "retrain": _retrain_state(dataset, config, round_row, counts),
         "holdout": _holdout_state(config),
+        **({"seed": _llm_seed_state(dataset)} if config.seed_source == "llm" else {}),
     }
+
+
+def _llm_seed_state(dataset):
+    """Where the LLM job choosing the first batch is; unknown once Redis forgets it."""
+    from ..queue_contract import llm_job_status_key, llm_seed_job_key
+
+    redis_client = current_app.redis_client
+    job_id = redis_client.get(llm_seed_job_key(dataset.id))
+    raw = redis_client.get(llm_job_status_key(job_id)) if job_id else None
+    if not raw:
+        return {"status": "unknown"}
+    status = json.loads(raw)
+    status.pop("owner_id", None)
+    return {"job_id": job_id, **status}
 
 
 def _holdout_labelled(config):

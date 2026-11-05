@@ -314,6 +314,12 @@ def test_status_reports_acknowledgement(client, app, gated):
     assert client.get(url, headers=gated).get_json()["acknowledged"] is True
 
 
+def test_status_reports_how_many_items_one_request_may_suggest(client, app, gated):
+    app.config["LLM_MAX_SYNC_TASKS"] = 7
+
+    assert client.get("/api/llm/status", headers=gated).get_json()["max_sync_tasks"] == 7
+
+
 # Suggestions
 
 

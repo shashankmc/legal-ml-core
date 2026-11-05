@@ -194,6 +194,7 @@ def process_llm_annotation_task(task_info, redis_client):
             raise CredentialError("The LLM key for this job is no longer available.")
         suggest_tasks(dataset, tasks, credential, owner_id, on_progress=progress)
     except BudgetExhausted:
+        _order_seed(dataset, task_info)
         _set_status(
             redis_client,
             job_id,
@@ -203,7 +204,18 @@ def process_llm_annotation_task(task_info, redis_client):
     except (LLMError, CredentialError) as exc:
         _set_status(redis_client, job_id, status="failed", error=str(exc))
     else:
+        _order_seed(dataset, task_info)
         _set_status(redis_client, job_id, status="completed")
+
+
+def _order_seed(dataset, task_info):
+    """An active learning seed job orders the first batch from what it suggested."""
+    if not task_info.get("seed_batch_size"):
+        return
+    from ..active_learning.loop import order_llm_seed
+
+    order_llm_seed(dataset.id, task_info["task_ids"], task_info["seed_batch_size"])
+    db.session.commit()
 
 
 def fail_llm_job(raw, redis_client):

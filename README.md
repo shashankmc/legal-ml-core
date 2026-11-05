@@ -42,6 +42,15 @@ itself: the state reports `retrain.suggested` once a batch of new labels exists
 and every label has its minimum, and `POST /datasets/<id>/retrain` trains. The
 worker then rescores the pool on `scoring_queue`, so the queue reorders.
 
+The first batch can instead be suggested by an LLM (`seed_source: "llm"`), so a
+rare label is in it from the start. The LLM labels three batches' worth of the
+random order on the worker, and the first batch is taken from that, each
+suggested label in turn, rarest first; every item in it comes with its
+suggestion. It needs labels named on the Dataset, the same access and
+acknowledgement as LLM annotation, and `confirm_estimate: true` after
+`POST /datasets/<id>/seed-estimate`. The state's `seed` reports the job. If the
+job fails, the random order stays.
+
 A Dataset that does not name its labels can get one wrong by a typo, so
 `PUT /datasets/<id>/labels` corrects a typed label on every saved item. With a loop
 started, every way to train keeps the minimum per label, not only `retrain`.
