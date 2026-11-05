@@ -253,3 +253,32 @@ def test_a_ghost_job_does_not_block_a_new_start(client, auth_headers, app, model
     assert dict(_jobs(app, model_id))[ghost] == "failed"
     assert fake_redis.llen("training_queue") == 1
     assert _model_status(app, model_id) == "training"
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("test_size", [0, 1, -0.1, 1.5, "half", True, None])
+def test_a_test_size_outside_zero_and_one_is_refused(
+    client, auth_headers, app, fake_redis, model_id, route, test_size
+):
+    response = client.post(
+        route.format(id=model_id),
+        json={"model_id": model_id, "test_size": test_size},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400, response.get_json()
+    assert fake_redis.llen("training_queue") == 0
+    assert _jobs(app, model_id) == []
+    assert _model_status(app, model_id) == "pending"
+
+
+@pytest.mark.parametrize("route", ROUTES)
+def test_a_test_size_between_zero_and_one_is_queued(client, auth_headers, app, fake_redis, model_id, route):
+    response = client.post(
+        route.format(id=model_id),
+        json={"model_id": model_id, "test_size": 0.3},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert json.loads(fake_redis.rpop("training_queue"))["test_size"] == 0.3

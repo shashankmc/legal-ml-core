@@ -8,6 +8,20 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `test_size` in a training start request sets the share of rows held out for
+  testing. It was ignored, and every run held out 20%. A value that is not more
+  than 0 and less than 1 is refused with 400 before anything is queued.
+- Logistic regression is built from `l1_ratio` and `C` instead of `penalty`, which
+  scikit-learn 1.10 removes: `l1` is a ratio of 1, `l2` of 0, and `none` an
+  infinite `C`. The catalogue's settings are unchanged.
+
+### Changed
+
+- Needs scikit-learn 1.8 or later, the first where `l1_ratio` alone picks the
+  penalty. Still capped below 1.10 until the suite runs on it.
+
 ## [0.6.0] - 2026-11-05
 
 ### Added

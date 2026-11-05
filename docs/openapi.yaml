@@ -1605,7 +1605,7 @@ components:
       type: object
       properties:
         preprocessing_options: { type: object, default: {} }
-        test_size: { type: number, default: 0.2 }
+        test_size: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1, default: 0.2, description: Share of rows held out for testing. Outside this range the start is refused with 400. }
         random_state: { type: integer, default: 42 }
     Dataset:
       type: object
