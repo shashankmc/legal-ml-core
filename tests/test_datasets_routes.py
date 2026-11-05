@@ -1,5 +1,7 @@
 import io
 
+import pytest
+
 from legal_ml_core import Dataset, db
 from legal_ml_core.routes.datasets import validate_dataset_file
 from tests.conftest import TEST_USER_ID
@@ -242,3 +244,36 @@ def test_filtered_rows_of_another_owners_dataset_are_not_found(
         f"/api/datasets/{dataset_id}/rows?term=breach&label=A", headers=auth_headers
     )
     assert resp.status_code == 404
+
+
+def _multipart(rows):
+    boundary = "b0undary"
+    body = (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nbig\r\n"
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"task_type\"\r\n\r\nclassification\r\n"
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.csv\"\r\n"
+        "Content-Type: text/csv\r\n\r\n"
+        "text,label\n" + "the court ruled for the plaintiff,civil\n" * rows + f"\r\n--{boundary}--\r\n"
+    ).encode()
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+@pytest.mark.parametrize("declared", [True, False], ids=["declared size", "chunked"])
+def test_an_upload_over_the_size_limit_is_refused_as_too_large(client, auth_headers, app, declared):
+    app.config["MAX_CONTENT_LENGTH"] = 1024
+    body, content_type = _multipart(rows=200)
+    headers = dict(auth_headers, **({} if declared else {"Transfer-Encoding": "chunked"}))
+
+    response = client.post(
+        "/api/datasets/upload",
+        input_stream=io.BytesIO(body),
+        content_length=len(body) if declared else None,
+        content_type=content_type,
+        headers=headers,
+        environ_overrides={} if declared else {"wsgi.input_terminated": True},
+    )
+
+    assert response.status_code == 413
+    assert "too large" in response.get_json()["error"]
+    with app.app_context():
+        assert Dataset.query.count() == 0
