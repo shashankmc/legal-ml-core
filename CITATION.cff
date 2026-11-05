@@ -22,7 +22,7 @@ authors:
 license: MIT
 repository-code: "https://github.com/shashankmc/legal-ml-core"
 url: "https://github.com/shashankmc/legal-ml-core"
-version: "0.6.0"
+version: "0.7.0"
 date-released: "2026-11-05"
 keywords:
   - "legal NLP"
