@@ -3,6 +3,7 @@ route, queue message and worker. Everything is read off the fitted estimator,
 because the stored parameters always showed the choice, even when it was ignored."""
 import json
 import random
+import warnings
 
 import joblib
 import pandas as pd
@@ -42,7 +43,7 @@ def _dataset(app, tmp_path, task_type, labels):
         return dataset.id
 
 
-def _run(client, auth_headers, app, fake_redis, dataset_id, model_type, parameters):
+def _run(client, auth_headers, app, fake_redis, dataset_id, model_type, parameters, start=None):
     """Create, start and run a model as the wizard and the worker do."""
     created = client.post(
         "/api/models/",
@@ -51,7 +52,7 @@ def _run(client, auth_headers, app, fake_redis, dataset_id, model_type, paramete
     )
     assert created.status_code == 201, created.get_json()
     model_id = created.get_json()["model"]["id"]
-    started = client.post(f"/api/models/{model_id}/train", json={}, headers=auth_headers)
+    started = client.post(f"/api/models/{model_id}/train", json=start or {}, headers=auth_headers)
     assert started.status_code == 200, started.get_json()
 
     task = json.loads(fake_redis.rpop("training_queue"))
@@ -113,13 +114,15 @@ def topics(app, tmp_path):
         (
             "logistic_regression",
             {"C": 0.5, "penalty": "l1", "solver": "liblinear"},
-            {"C": 0.5, "penalty": "l1", "solver": "liblinear"},
+            {"C": 0.5, "l1_ratio": 1.0, "solver": "liblinear"},
         ),
         (
             "logistic_regression",
             {"penalty": "elasticnet", "solver": "saga", "l1_ratio": 0.3},
-            {"penalty": "elasticnet", "solver": "saga", "l1_ratio": 0.3},
+            {"l1_ratio": 0.3, "solver": "saga"},
         ),
+        ("logistic_regression", {"C": 2.0, "penalty": "l2"}, {"C": 2.0, "l1_ratio": 0.0}),
+        ("logistic_regression", {"C": 2.0, "penalty": "none"}, {"C": float("inf"), "l1_ratio": 0.0}),
     ],
 )
 def test_a_saved_classifier_has_the_chosen_parameters(
@@ -128,6 +131,21 @@ def test_a_saved_classifier_has_the_chosen_parameters(
     _, model = _train(client, auth_headers, app, fake_redis, classifying, model_type, chosen)
 
     assert _params(_fitted(model), *expected) == expected
+
+
+@pytest.mark.parametrize("penalty, solver", [("l1", "liblinear"), ("l2", "lbfgs"), ("elasticnet", "saga"), ("none", "lbfgs")])
+def test_logistic_regression_does_not_use_the_penalty_scikit_learn_removes(
+    client, auth_headers, app, fake_redis, classifying, penalty, solver
+):
+    # scikit-learn 1.10 removes the penalty argument, and warns before then.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _train(
+            client, auth_headers, app, fake_redis, classifying, "logistic_regression",
+            {"penalty": penalty, "solver": solver},
+        )
+
+    assert not [w for w in caught if "penalty" in str(w.message)]
 
 
 def test_the_forest_really_grows_the_chosen_trees(client, auth_headers, app, fake_redis, classifying):
@@ -248,6 +266,16 @@ def test_a_transformer_trains_for_the_chosen_epochs(client, auth_headers, app, f
     assert job.status == "completed", job.error_message
     points = TrainingMetricPoint.query.filter_by(training_job_id=task["job_id"]).all()
     assert {point.epoch for point in points if point.metric_name == "eval_accuracy"} == {1.0, 2.0}
+
+
+def test_the_chosen_test_size_is_the_share_held_out(client, auth_headers, app, fake_redis, classifying):
+    _, job = _run(
+        client, auth_headers, app, fake_redis, classifying, "naive_bayes", {}, start={"test_size": 0.5}
+    )
+
+    assert job.status == "completed", job.error_message
+    # Half of the 30 rows, where the old fixed split held out 6.
+    assert sum(map(sum, job.metrics["confusion_matrix"])) == 15
 
 
 def test_chosen_parameters_cannot_replace_what_the_server_decides(

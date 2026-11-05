@@ -191,6 +191,7 @@ def _chosen_parameters(task_info, monitoring):
     stored parameter can never replace them."""
     parameters = dict(task_info.get("parameters") or {})
     parameters.setdefault("random_state", task_info.get("random_state", 42))
+    parameters.setdefault("test_size", task_info.get("test_size", 0.2))
     parameters["model_id"] = task_info["model_id"]
     parameters["monitoring"] = monitoring
     return parameters

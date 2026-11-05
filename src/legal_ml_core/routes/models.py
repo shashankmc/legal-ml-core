@@ -1351,6 +1351,14 @@ SETTINGS_LOCKED_MESSAGE = (
 )
 
 
+TEST_SIZE_MESSAGE = "The share of rows held out for testing must be more than 0 and less than 1."
+
+
+def _is_share(value):
+    # bool is an int to Python, and true is not a share.
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < 1
+
+
 def start_training_job(owner_id, model_id, data, al_round_id=None):
     """The one way a training run starts; both start routes call it. Returns
     (response body, status). Starting a model with an active job returns that
@@ -1359,6 +1367,9 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
     round, so the worker rescores the pool after it; it never comes from a body.
     A round cannot join a job already running: that job has no round to rescore
     and did not see the round's labels, so the round is refused instead."""
+    if "test_size" in data and not _is_share(data["test_size"]):
+        return {"error": TEST_SIZE_MESSAGE}, 400
+
     model, active = _lock_model_and_find_active_job(model_id, owner_id)
     if not model:
         return {"error": "Model not found"}, 404

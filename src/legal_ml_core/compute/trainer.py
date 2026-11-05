@@ -34,6 +34,10 @@ from ..monitoring import effective_monitoring
 from ..system_metrics import log_system_readings
 from .preprocessing import TextPreprocessor
 
+# The catalogue's penalties as scikit-learn 1.8+ expresses them. "none" is l2 with
+# an infinite C, so the ratio does not matter.
+L1_RATIOS = {"l1": 1.0, "l2": 0.0, "none": 0.0}
+
 
 class TrainingCancelled(Exception):
     """Raised when a Stop request (Redis `job_cancel_<id>`) is observed."""
@@ -222,7 +226,7 @@ class MLModelTrainer:
 
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(
-            X, labels, test_size=0.2, random_state=42, stratify=labels
+            X, labels, test_size=parameters.get("test_size", 0.2), random_state=42, stratify=labels
         )
 
         # "none" is the catalogue's name for sklearn's default of equal weights.
@@ -274,16 +278,20 @@ class MLModelTrainer:
                 raise ValueError(
                     "The liblinear solver handles two labels only. Choose another solver for this Dataset."
                 )
-            # Without a ratio, scikit-learn 1.8 and later fit elasticnet as plain l2.
-            mix = {"l1_ratio": parameters.get("l1_ratio", 0.5)} if penalty == "elasticnet" else {}
+            # scikit-learn 1.10 removes penalty: l1_ratio picks the penalty, and
+            # no penalty is an infinite C (BAIGLE #76).
+            if penalty == "elasticnet":
+                l1_ratio = parameters.get("l1_ratio", 0.5)
+            elif penalty in L1_RATIOS:
+                l1_ratio = L1_RATIOS[penalty]
+            else:
+                raise ValueError(f"Unsupported penalty: {penalty}")
             self.model = LogisticRegression(
-                C=parameters.get("C", 1.0),
-                # "none" is the catalogue's name for scikit-learn's None.
-                penalty=None if penalty == "none" else penalty,
+                C=np.inf if penalty == "none" else parameters.get("C", 1.0),
+                l1_ratio=l1_ratio,
                 solver=solver,
                 class_weight=class_weight,
                 random_state=42,
-                **mix,
             )
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
@@ -597,7 +605,11 @@ class MLModelTrainer:
 
         texts_list = list(texts)
         X_train, X_test, y_train, y_test = train_test_split(
-            texts_list, list(labels), test_size=0.2, random_state=42, stratify=labels
+            texts_list,
+            list(labels),
+            test_size=parameters.get("test_size", 0.2),
+            random_state=42,
+            stratify=labels,
         )
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)

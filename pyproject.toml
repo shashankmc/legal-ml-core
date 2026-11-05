@@ -27,9 +27,10 @@ dependencies = [
     "psycopg2-binary>=2.9.7,<3",  # legal_ml_core.worker builds its own engine against DATABASE_URL
     "pandas>=2.1,<3",
     "numpy>=1.24,<2",
-    # AgglomerativeClustering `metric=`/NMF `alpha_W=` kwargs require >=1.4. 1.10 removes
-    # LogisticRegression `penalty`, which the trainer passes: shashankmc/reducing_digital_divide#76.
-    "scikit-learn>=1.4,<1.10",
+    # 1.8 is the first where LogisticRegression's l1_ratio picks the penalty on its own,
+    # which the trainer relies on (shashankmc/reducing_digital_divide#76). Lift the
+    # cap once the suite passes on 1.10.
+    "scikit-learn>=1.8,<1.10",
     "plotly>=5.17,<6",
     "joblib>=1.3",
     "requests>=2.31,<3",  # OpenAI-compatible LLM endpoint calls (see llm/client.py)
