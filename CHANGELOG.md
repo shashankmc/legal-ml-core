@@ -8,6 +8,8 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-05
+
 ### Added
 
 - With `monitoring.learning_curve` on, a classical Text Classification run also
@@ -335,7 +337,8 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/shashankmc/legal-ml-core/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.4.0...v0.5.0
