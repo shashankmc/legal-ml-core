@@ -16,6 +16,9 @@ While the version is 0.x, minor releases may contain breaking changes.
 - Logistic regression is built from `l1_ratio` and `C` instead of `penalty`, which
   scikit-learn 1.10 removes: `l1` is a ratio of 1, `l2` of 0, and `none` an
   infinite `C`. The catalogue's settings are unchanged.
+- An upload over the host's `MAX_CONTENT_LENGTH` gets a 413 saying the file is
+  too large, with the limit, whether or not the request declares its size. It got
+  a 500.
 
 ### Changed
 

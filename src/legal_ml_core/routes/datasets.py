@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app
 from ..auth import jwt_required, get_jwt_identity
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 from ..db import db
 from ..annotation_queue import record_rows_to_label
@@ -269,6 +270,13 @@ def get_dataset(dataset_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _too_large_message():
+    limit = current_app.config.get("MAX_CONTENT_LENGTH")
+    if not limit:
+        return "That file is too large."
+    return f"That file is too large. Upload a file under {limit / (1024 * 1024):g} MB."
+
+
 @datasets_bp.route("/upload", methods=["POST"])
 @jwt_required()
 def upload_dataset():
@@ -388,6 +396,10 @@ def upload_dataset():
             ),
             201,
         )
+
+    except RequestEntityTooLarge:
+        # Raised while the form is read, before anything is saved (BAIGLE #99).
+        return jsonify({"error": _too_large_message()}), 413
 
     except Exception as e:
         db.session.rollback()
