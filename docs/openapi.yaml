@@ -1044,6 +1044,13 @@ paths:
     post:
       tags: [active-learning]
       summary: Start the loop. Draws the holdout and shuffles the seed batch.
+      description: >-
+        With `seed_source: llm`, the LLM labels a random sample of the pool
+        (three batches' worth, never the holdout) on the worker, and the first
+        batch is then picked so each suggested label is in it, rarest first.
+        Needs labels named on the Dataset, LLM access, the project's
+        acknowledgement and `confirm_estimate: true` after
+        `POST .../seed-estimate`. The state's `seed` reports the job.
       requestBody:
         content:
           application/json:
@@ -1054,11 +1061,44 @@ paths:
                 batch_size: {type: integer}
                 min_per_class: {type: integer}
                 holdout_percent: {type: integer, description: "0 turns the holdout off"}
-                seed_source: {type: string, enum: [random, llm]}
+                seed_source: {type: string, enum: [random, llm], default: random}
+                confirm_estimate: {type: boolean, description: "Required, true, with seed_source llm"}
       responses:
         "201": {description: Started}
-        "400": {description: Not text classification, or nothing to label}
-        "409": {description: Already started}
+        "400": {description: "Not text classification, nothing to label, no named labels, or the estimate not confirmed"}
+        "403": {description: "No LLM access: `code` no_llm_access, `byok_available` true"}
+        "409": {description: "Already started, or the project has not acknowledged the destination (`code` acknowledgement_required)"}
+        "429": {description: "The seed is larger than the remaining monthly limit (`code` budget_exhausted)"}
+  /api/active-learning/datasets/{dataset_id}/seed-estimate:
+    parameters:
+      - {name: dataset_id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [active-learning]
+      summary: What an LLM-suggested first batch would send and cost, before starting.
+      description: Sampled from the file; creates nothing.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                batch_size: {type: integer}
+                holdout_percent: {type: integer}
+      responses:
+        "200":
+          description: Estimate
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks: {type: integer, description: Items the LLM would label}
+                  estimated_tokens: {type: integer}
+                  remaining_tokens: {type: [integer, "null"], description: "null with the user's own key"}
+                  within_budget: {type: boolean}
+                  destination: {type: string}
+        "400": {description: "Not single-label classification, or no named labels"}
+        "403": {description: No LLM access}
   /api/active-learning/datasets/{dataset_id}/strategy:
     parameters:
       - {name: dataset_id, in: path, required: true, schema: {type: string}}

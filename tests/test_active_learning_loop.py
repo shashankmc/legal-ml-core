@@ -262,20 +262,11 @@ def test_reset_clears_scores_and_starts_the_rounds_again(client, auth_headers, a
     assert body["retrain"]["new_labels"] == 0
 
 
-def test_the_llm_seed_is_not_available_yet(client, auth_headers, app, tmp_path):
-    dataset_id = link_dataset(app, tmp_path, ["a", "b"])
-
-    resp = start(client, auth_headers, dataset_id, seed_source="llm")
-
-    assert resp.status_code == 400
-    assert resp.get_json()["error"] == "LLM-suggested seed batches are not available yet."
-    assert state(client, auth_headers, dataset_id)["active"] is False
-
-
-def test_settings_say_the_llm_seed_is_off(client, auth_headers):
+def test_settings_offer_both_seeds(client, auth_headers):
     body = client.get("/api/active-learning/settings", headers=auth_headers).get_json()
 
-    assert body["seed_sources"] == {"random": True, "llm": False}
+    # The LLM seed itself: tests/test_active_learning_llm_seed.py.
+    assert body["seed_sources"] == {"random": True, "llm": True}
     assert body["min_per_class"] == 5
 
 

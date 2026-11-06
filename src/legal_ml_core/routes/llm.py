@@ -179,6 +179,8 @@ def status():
         "shared_key_allowed": shared_allowed,
         "key": {"base_url": key.base_url, "model": key.model} if key else None,
         "remaining_tokens": None,
+        # The most items one POST .../suggestions may ask for.
+        "max_sync_tasks": int_setting("LLM_MAX_SYNC_TASKS"),
     }
     if credential and credential.mode == "shared":
         body["remaining_tokens"] = remaining_tokens(owner_id)
