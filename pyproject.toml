@@ -55,6 +55,7 @@ compute = [
     "nltk>=3.8,<4",
     "lime>=0.2.0",
     "shap>=0.43",
+    "skops>=0.10",  # publishing exports scikit-learn Models as skops (compute/export.py)
 ]
 test = [
     "legal-ml-core[compute]",

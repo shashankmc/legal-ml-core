@@ -37,6 +37,7 @@ PREDICTION_RESULT_TTL_SECONDS = 300
 BATCH_PREDICTION_RESULT_TTL_SECONDS = 1800
 EXPLANATION_RESULT_TTL_SECONDS = 3600
 LLM_JOB_STATUS_TTL_SECONDS = 24 * 3600
+MODEL_EXPORT_RESULT_TTL_SECONDS = 600
 
 WORKER_LIVENESS_KEY = "legal_ml_worker_alive"
 
@@ -72,6 +73,11 @@ def explanation_result_key(explanation_id):
 def llm_seed_job_key(dataset_id):
     """The LLM job choosing this dataset's first active learning batch."""
     return f"al_seed_job_{dataset_id}"
+
+
+def model_export_result_key(export_id):
+    """Where the worker answers an export request (BAIGLE #69)."""
+    return f"model_export_result_{export_id}"
 
 
 def llm_job_status_key(job_id):

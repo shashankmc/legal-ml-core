@@ -73,6 +73,26 @@ long a round waits for the scoring worker before it is called lost),
 `LEGAL_ML_SCORING_QUEUE` (`scoring_queue`, the same name passed to
 `run_ml_worker(scoring_queue=...)`).
 
+## Exporting a Model for publishing
+
+`request_model_export(redis_client, model, texts)` asks the worker to export a
+classification Model in a format safe to publish (BAIGLE #69), and waits up to
+110 seconds. The API process cannot do it itself: a saved Model's preprocessor
+needs nltk and a transformer needs torch. The worker writes, to
+`<model storage>/export_<model id>/`:
+
+- scikit-learn: `model.skops` (vectorizer and classifier), or transformers:
+  `model.safetensors`, `config.json` and the tokenizer files;
+- `preprocessing.json`: the text cleaning, the labels in output order, the
+  library versions, and for skops the types the file may contain;
+- `predict.py`: a reference script that cleans text and predicts with only
+  those files.
+
+It then runs that `predict.py` on `texts` and compares it with the platform's own
+predictions. The answer is `{"directory", "files", "round_trip": {"ok", "detail",
+"compared"}}`; publish only when `ok`. The request travels on the prediction
+queue as `{"action": "export", ...}`, so no extra worker loop is needed.
+
 ## LLM annotation
 
 Everything under `/api/llm` is described in `docs/openapi.yaml`. Suggestions never
