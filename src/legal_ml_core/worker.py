@@ -33,10 +33,12 @@ from .queue_contract import (
     BATCH_PREDICTION_RESULT_TTL_SECONDS,
     EXPLANATION_RESULT_TTL_SECONDS,
     JOB_STATUS_TTL_SECONDS,
+    MODEL_EXPORT_RESULT_TTL_SECONDS,
     PREDICTION_RESULT_TTL_SECONDS,
     batch_prediction_result_key,
     explanation_result_key,
     job_status_key,
+    model_export_result_key,
     prediction_result_key,
 )
 
@@ -194,6 +196,8 @@ def _prediction_loop(
 ):
     def handle(raw):
         task_info = json.loads(raw)
+        if task_info.get("action") == "export":
+            return _export(task_info)
         prediction_id = task_info["prediction_id"]
         with app.app_context():
             result = process_prediction_task(task_info, model_storage_path)
@@ -202,7 +206,25 @@ def _prediction_loop(
         redis_client.expire(result_key, PREDICTION_RESULT_TTL_SECONDS)
         logger.info("prediction completed (%s)", prediction_id)
 
+    def _export(task_info):
+        # Publishing asks for an export on this queue: it needs the same stack.
+        from .compute.export import process_export_task
+
+        with app.app_context():
+            result = process_export_task(task_info, model_storage_path)
+        _answer_export(task_info["export_id"], result)
+        logger.info("export completed (%s)", task_info["export_id"])
+
+    def _answer_export(export_id, result):
+        result_key = model_export_result_key(export_id)
+        redis_client.lpush(result_key, json.dumps(result))
+        redis_client.expire(result_key, MODEL_EXPORT_RESULT_TTL_SECONDS)
+
     def on_error(raw, exc):
+        export_id = _parse_field(raw, "export_id")
+        if export_id:
+            _answer_export(export_id, {"error": str(exc)})
+            return
         prediction_id = _parse_field(raw, "prediction_id")
         if prediction_id:
             result_key = prediction_result_key(prediction_id)

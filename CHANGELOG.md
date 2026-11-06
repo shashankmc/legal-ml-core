@@ -19,6 +19,12 @@ While the version is 0.x, minor releases may contain breaking changes.
   `seed_sources.llm` in the settings is now `true` (BAIGLE #67).
 - `GET /api/llm/status` reports `max_sync_tasks`, the most items one
   suggestions request may ask for, so a UI need not assume the default.
+- Exporting a classification Model for publishing (BAIGLE #69, ADR 0006):
+  `legal_ml_core.model_export.request_model_export` asks the worker, on the
+  prediction queue, to write skops (scikit-learn) or safetensors plus tokenizer
+  (transformers) files with `preprocessing.json` and a `predict.py` reference
+  script, then checks that script's predictions against the platform's on the
+  given texts. `skops` joins the `compute` extra.
 
 ## [0.7.0] - 2026-11-05
 
