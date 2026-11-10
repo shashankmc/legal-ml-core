@@ -8,6 +8,13 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** a dataset upload is limited to 1,000 rows, down from 10,000
+  (`MAX_ROWS` in `routes/datasets.py`). A larger file gets 400
+  `Dataset exceeds maximum allowed rows (1000)` and nothing is stored. Datasets
+  already stored are not affected. Tests now cover the boundary.
+
 ## [0.8.0] - 2026-11-06
 
 ### Added

@@ -21,7 +21,7 @@ import json
 datasets_bp = Blueprint("datasets", __name__)
 
 ALLOWED_EXTENSIONS = {"csv", "xlsx", "json"}
-MAX_ROWS = 10000
+MAX_ROWS = 1000
 
 # Single source of truth for upload task types. The frontend renders this
 # catalogue (via GET /datasets/task-types) so its task guidance cannot drift

@@ -70,7 +70,7 @@ paths:
       tags: [datasets]
       summary: Upload and validate a dataset file
       description: >-
-        Accepts CSV, XLSX or JSON, at most 10000 rows. Required columns depend
+        Accepts CSV, XLSX or JSON, at most 1000 rows. Required columns depend
         on `task_type`; see docs/data-formats.md. Training reads the stored
         file as CSV, so upload CSV for anything you intend to train on.
       operationId: uploadDataset

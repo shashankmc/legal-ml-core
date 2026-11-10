@@ -1,4 +1,5 @@
 import io
+import os
 
 import pytest
 
@@ -277,3 +278,34 @@ def test_an_upload_over_the_size_limit_is_refused_as_too_large(client, auth_head
     assert "too large" in response.get_json()["error"]
     with app.app_context():
         assert Dataset.query.count() == 0
+
+
+def _upload_rows(client, auth_headers, n_rows):
+    rows = [[f"clause number {i}", "positive" if i % 2 else "negative"] for i in range(n_rows)]
+    data = {
+        "file": (io.BytesIO(_csv_bytes(["text", "label"], rows)), "rows.csv"),
+        "name": f"{n_rows} rows",
+        "task_type": "classification",
+    }
+    return client.post(
+        "/api/datasets/upload",
+        data=data,
+        content_type="multipart/form-data",
+        headers=auth_headers,
+    )
+
+
+def test_upload_accepts_exactly_1000_rows(client, auth_headers):
+    resp = _upload_rows(client, auth_headers, 1000)
+
+    assert resp.status_code == 201, resp.get_json()
+    assert resp.get_json()["dataset"]["row_count"] == 1000
+
+
+def test_upload_refuses_1001_rows_and_keeps_nothing(app, client, auth_headers):
+    resp = _upload_rows(client, auth_headers, 1001)
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Dataset exceeds maximum allowed rows (1000)"
+    assert client.get("/api/datasets/", headers=auth_headers).get_json()["datasets"] == []
+    assert os.listdir(app.config["UPLOAD_FOLDER"]) == []
