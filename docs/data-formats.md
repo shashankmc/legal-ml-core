@@ -11,7 +11,7 @@ described in [`openapi.yaml`](openapi.yaml).
 
 - **File types:** `.csv`, `.xlsx` or `.json` (anything pandas can read as a
   table with `read_csv`, `read_excel` or `read_json`).
-- **Size:** at most 1,000 rows. A larger file gets 400 `Dataset exceeds maximum allowed rows (1000)`.
+- **Size:** at most 1,000 rows unless the host sets `LEGAL_ML_MAX_ROWS`. A larger file gets 400 `Dataset exceeds maximum allowed rows (<cap>)`.
 - **Header row:** required. Required column names are checked
   case-insensitively (`Text` counts as `text`).
 - **Storage:** the file is saved unchanged as `<uuid>_<original name>` in the

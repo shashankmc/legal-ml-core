@@ -73,6 +73,31 @@ long a round waits for the scoring worker before it is called lost),
 `LEGAL_ML_SCORING_QUEUE` (`scoring_queue`, the same name passed to
 `run_ml_worker(scoring_queue=...)`).
 
+## Creating a dataset from a file
+
+The upload route is a thin wrapper over `create_dataset`, which hosts can call
+directly to bring data in another way (an import job, for example), so every
+dataset passes the same checks:
+
+```python
+from legal_ml_core import DatasetInvalid, create_dataset
+
+try:
+    dataset = create_dataset(
+        owner_id=user_id, file_path=path, name="LEDGAR sample", description="",
+        task_type="classification", annotation_mode=False, labels=None,
+    )
+except DatasetInvalid as refused:
+    ...  # str(refused) is safe to show a student
+```
+
+The caller owns the file: `create_dataset` neither moves nor deletes it. Any
+other exception is a bug or an outage and is left to the host.
+
+The row cap is 1,000 unless the host sets `LEGAL_ML_MAX_ROWS` to a whole number,
+or to a function returning one. A function is read on every upload, so a cap an
+admin changes applies at once. A cap of 0 or less raises `ValueError`.
+
 ## Exporting a Model for publishing
 
 `request_model_export(redis_client, model, texts)` asks the worker to export a
@@ -369,7 +394,7 @@ citation metadata is in [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this
 repository" button reads it); [`codemeta.json`](codemeta.json) carries the
 same metadata in CodeMeta form.
 
-> Chakravarthy, S. (2026). *legal-ml-core* (Version 0.9.0) [Computer
+> Chakravarthy, S. (2026). *legal-ml-core* (Version 0.10.0) [Computer
 > software]. Maastricht University. https://github.com/shashankmc/legal-ml-core
 
 **DOI:** not yet assigned. Once the repository is connected to Zenodo, each
