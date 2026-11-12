@@ -9,6 +9,7 @@ from .auth import (
     verify_bearer_token,
 )
 from .blueprint import init_ml_feature
+from .dataset_creation import DatasetInvalid, create_dataset
 from .db import MLBase, db, get_db, set_active_db
 from .models import (
     ALConfig,
@@ -58,6 +59,8 @@ __all__ = [
     "get_jwt",
     "get_jwt_identity",
     "init_ml_feature",
+    "create_dataset",
+    "DatasetInvalid",
     "jwt_required",
     "owner_ref",
     "run_ml_worker",

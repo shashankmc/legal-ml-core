@@ -309,3 +309,26 @@ def test_upload_refuses_1001_rows_and_keeps_nothing(app, client, auth_headers):
     assert resp.get_json()["error"] == "Dataset exceeds maximum allowed rows (1000)"
     assert client.get("/api/datasets/", headers=auth_headers).get_json()["datasets"] == []
     assert os.listdir(app.config["UPLOAD_FOLDER"]) == []
+
+
+def test_upload_honours_the_hosts_row_cap(app, client, auth_headers):
+    app.config["LEGAL_ML_MAX_ROWS"] = lambda: 3
+
+    assert _upload_rows(client, auth_headers, 3).status_code == 201
+    resp = _upload_rows(client, auth_headers, 4)
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Dataset exceeds maximum allowed rows (3)"
+    assert len(os.listdir(app.config["UPLOAD_FOLDER"])) == 1
+
+
+def test_an_unexpected_failure_reaches_the_host_and_keeps_no_file(app, client, auth_headers, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr("legal_ml_core.dataset_creation.record_rows_to_label", broken)
+    app.config["PROPAGATE_EXCEPTIONS"] = True
+
+    with pytest.raises(RuntimeError, match="database went away"):
+        _upload_rows(client, auth_headers, 2)
+    assert os.listdir(app.config["UPLOAD_FOLDER"]) == []

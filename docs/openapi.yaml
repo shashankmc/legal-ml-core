@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: legal-ml-core HTTP API
-  version: 0.9.0
+  version: 0.10.0
   summary: Routes registered on a host Flask app by legal_ml_core.init_ml_feature.
   description: |
     Every route below is registered by `init_ml_feature(app, ...)`. Paths are
@@ -70,7 +70,7 @@ paths:
       tags: [datasets]
       summary: Upload and validate a dataset file
       description: >-
-        Accepts CSV, XLSX or JSON, at most 1000 rows. Required columns depend
+        Accepts CSV, XLSX or JSON, at most 1000 rows unless the host sets LEGAL_ML_MAX_ROWS. Required columns depend
         on `task_type`; see docs/data-formats.md. Training reads the stored
         file as CSV, so upload CSV for anything you intend to train on.
       operationId: uploadDataset

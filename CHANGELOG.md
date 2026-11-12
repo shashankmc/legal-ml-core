@@ -8,6 +8,24 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-12
+
+### Added
+
+- `create_dataset(owner_id, file_path, name, description, task_type,
+  annotation_mode, labels)`, the one path from a file to a Dataset. It raises
+  `DatasetInvalid` with a student-readable message for every refusal. The upload
+  route now wraps it (BAIGLE #110).
+- `LEGAL_ML_MAX_ROWS` host config: the row cap, as a whole number or a function
+  returning one (read on every upload). Unset, it stays 1,000. A cap of 0 or less
+  raises `ValueError`.
+
+### Changed
+
+- **Breaking:** an unexpected error during upload is no longer caught and returned
+  as 500 `{"error": "<exception text>"}`. It reaches the host's error handler, and
+  the saved file is still removed. Refusals are unchanged (400, same messages).
+
 ## [0.9.0] - 2026-11-10
 
 ### Changed
