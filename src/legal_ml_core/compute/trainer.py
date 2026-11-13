@@ -139,6 +139,19 @@ LEARNING_CURVE_FRACTIONS = (0.1, 0.25, 0.5, 0.75, 1.0)
 LOSS_POINTS = 12
 
 
+
+def _split(X, labels, test_size):
+    """Train/test split that keeps each label's share when it can.
+
+    Stratifying needs at least two rows of every label, and a test set with room
+    for each label. Imported data often has labels seen once, so then the split
+    is made at random rather than failing the run.
+    """
+    try:
+        return train_test_split(X, labels, test_size=test_size, random_state=42, stratify=labels)
+    except ValueError:
+        return train_test_split(X, labels, test_size=test_size, random_state=42)
+
 class MLModelTrainer:
     def __init__(self, redis_client, metric_logger=None, cancel_check=None):
         self.redis_client = redis_client
@@ -225,9 +238,7 @@ class MLModelTrainer:
         X = self.vectorizer.fit_transform(texts)
 
         # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, labels, test_size=parameters.get("test_size", 0.2), random_state=42, stratify=labels
-        )
+        X_train, X_test, y_train, y_test = _split(X, labels, parameters.get("test_size", 0.2))
 
         # "none" is the catalogue's name for sklearn's default of equal weights.
         class_weight = parameters.get("class_weight")
@@ -604,13 +615,7 @@ class MLModelTrainer:
         epochs = int(parameters.get("epochs", 3))
 
         texts_list = list(texts)
-        X_train, X_test, y_train, y_test = train_test_split(
-            texts_list,
-            list(labels),
-            test_size=parameters.get("test_size", 0.2),
-            random_state=42,
-            stratify=labels,
-        )
+        X_train, X_test, y_train, y_test = _split(texts_list, list(labels), parameters.get("test_size", 0.2))
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
