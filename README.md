@@ -133,7 +133,13 @@ derived from it in `legal_ml_core.annotation_format`:
 - **NER:** spans inside the text that do not overlap, saved as the entity list
   `[{text, start, end, type}]` in text order.
 
-A broken rule is a 400 that says which. Anything else that sets a label (the
+A broken rule is a 400 that says which.
+
+Every row with text has a task. A row the uploaded file labels starts labelled
+(`label_source: file`, the file's value kept in `file_label`), so it trains as is
+and can be reviewed and changed; `GET /api/annotation/projects/<id>/tasks?status=annotated&label=…&limit=…&offset=…`
+lists labelled items for review. NER files name types, not spans, so their rows
+stay pending, with the types as `hint` on the assignment. Anything else that sets a label (the
 plain `/save`, confirming an LLM suggestion) replaces the Assignment, which is
 then rebuilt from the label when opened, as it is for tasks saved before the
 payload existed; correcting a typed label renames it inside the Assignment.

@@ -1,4 +1,5 @@
-"""A dataset on a project offers its unlabelled rows for annotation."""
+"""A dataset on a project offers every row with text for annotation: blank rows
+to label, and rows the file labels as labelled tasks a person can change (#147)."""
 import io
 
 import pandas as pd
@@ -62,13 +63,13 @@ def test_unlabelled_rows_are_queued_in_row_order(client, auth_headers, app, tmp_
 
     assert body["task"]["text"] == "b"
     assert body["task"]["item_index"] == 1
-    assert body["stats"] == {"total": 2, "annotated": 0, "percentage": 0}
+    assert body["stats"] == {"total": 3, "annotated": 1, "percentage": 33}
 
 
 def test_whitespace_label_counts_as_blank(client, auth_headers, app, tmp_path):
     _link_dataset(app, tmp_path, {"text": ["a", "b"], "label": ["   ", "x"]})
 
-    assert [t["text"] for t in _tasks(client, auth_headers)] == ["a"]
+    assert [(t["text"], t["status"]) for t in _tasks(client, auth_headers)] == [("a", "pending"), ("b", "annotated")]
 
 
 def test_file_without_a_label_column_queues_every_row(client, auth_headers, app, tmp_path):
@@ -77,26 +78,34 @@ def test_file_without_a_label_column_queues_every_row(client, auth_headers, app,
     assert _next(client, auth_headers)["stats"]["total"] == 2
 
 
-def test_fully_labelled_dataset_queues_nothing(client, auth_headers, app, tmp_path):
+def test_a_fully_labelled_dataset_is_all_annotated_with_its_file_labels(client, auth_headers, app, tmp_path):
     _link_dataset(app, tmp_path, {"text": ["a", "b"], "label": ["x", "y"]})
 
     body = _next(client, auth_headers)
 
     assert body["task"] is None
-    assert body["stats"]["total"] == 0
-    assert body["message"] == "Nothing to annotate"
+    assert body["stats"] == {"total": 2, "annotated": 2, "percentage": 100}
+    assert body["message"] == "All items annotated"
+    tasks = _tasks(client, auth_headers)
+    assert [(t["annotation_label"], t["label_source"], t["file_label"]) for t in tasks] == [
+        ("x", "file", "x"),
+        ("y", "file", "y"),
+    ]
 
 
 def test_column_names_match_case_insensitively(client, auth_headers, app, tmp_path):
     _link_dataset(app, tmp_path, {"Text": ["a", "b"], "Label": ["x", None]})
 
-    assert [t["text"] for t in _tasks(client, auth_headers)] == ["b"]
+    assert [(t["text"], t["status"]) for t in _tasks(client, auth_headers)] == [("a", "annotated"), ("b", "pending")]
 
 
-def test_ner_rows_without_entities_are_queued(client, auth_headers, app, tmp_path):
-    _link_dataset(app, tmp_path, {"text": ["a", "b"], "entities": ["[]", None]}, task_type="ner")
+def test_ner_rows_are_all_queued_with_the_files_types_kept(client, auth_headers, app, tmp_path):
+    # An NER file names entity types, not spans, so every row is marked by hand.
+    _link_dataset(app, tmp_path, {"text": ["a", "b"], "entities": ["PERSON, ORG", None]}, task_type="ner")
 
-    assert [t["text"] for t in _tasks(client, auth_headers)] == ["b"]
+    tasks = _tasks(client, auth_headers)
+
+    assert [(t["text"], t["status"], t["file_label"]) for t in tasks] == [("a", "pending", "PERSON, ORG"), ("b", "pending", None)]
 
 
 def test_task_types_without_labels_queue_nothing(client, auth_headers, app, tmp_path):
@@ -164,23 +173,20 @@ def test_a_fully_labelled_file_is_read_only_once(client, auth_headers, app, tmp_
     _link_dataset(app, tmp_path, {"text": ["a", "b"], "label": ["x", "y"]})
     _next(client, auth_headers)
 
-    # Only a second read of the file could find this row.
-    _rewrite(tmp_path, {"text": ["a", "b"], "label": ["x", None]})
+    # Only a second read of the file could find this change.
+    _rewrite(tmp_path, {"text": ["a", "b", "c"], "label": ["x", None, None]})
 
-    assert _next(client, auth_headers)["stats"]["total"] == 0
+    assert _next(client, auth_headers)["stats"] == {"total": 2, "annotated": 2, "percentage": 100}
 
 
-def test_an_uploaded_labelled_file_is_never_read_for_the_queue(client, auth_headers, app, tmp_path):
+def test_an_uploaded_labelled_file_becomes_labelled_tasks(client, auth_headers, app, tmp_path):
     app.config.setdefault("_known_projects", set()).add((PROJECT_ID, TEST_USER_ID))
     dataset_id = _upload(client, auth_headers, "text,label\na,x\nb,y\n")
     dataset = db.session.get(Dataset, dataset_id)
     dataset.project_id = PROJECT_ID
     db.session.commit()
 
-    with open(dataset.file_path, "w") as rewritten:
-        rewritten.write("text,label\na,x\nb,\n")
-
-    assert _next(client, auth_headers)["stats"]["total"] == 0
+    assert _next(client, auth_headers)["stats"] == {"total": 2, "annotated": 2, "percentage": 100}
 
 
 def test_upload_counts_rows_to_label_the_way_the_queue_does(client, auth_headers):
@@ -316,6 +322,19 @@ def test_saved_annotations_become_training_labels(client, auth_headers, app, fak
     assert model.metrics["confusion_matrix_labels"] == ["civil", "criminal", "labour"]
 
 
+def test_a_changed_file_label_trains_with_the_change(client, auth_headers, app, fake_redis, tmp_path):
+    rows = {"text": _sentences(12), "label": ["civil", "criminal"] * 6}
+    dataset_id = _link_dataset(app, tmp_path, rows)
+    _next(client, auth_headers)
+    for task in _tasks(client, auth_headers)[:2]:
+        client.post(f"/api/annotation/tasks/{task['id']}/save", json={"annotation_label": "labour"}, headers=auth_headers)
+
+    model, job = _train(app, fake_redis, dataset_id)
+
+    assert job.status == "completed"
+    assert model.metrics["confusion_matrix_labels"] == ["civil", "criminal", "labour"]
+
+
 def test_file_without_a_label_column_trains_on_saved_annotations(
     client, auth_headers, app, fake_redis, tmp_path
 ):
@@ -367,3 +386,73 @@ def test_training_reads_the_text_column_wherever_it_sits(
 
     assert job.status == "completed"
     assert model.metrics["confusion_matrix_labels"] == ["civil", "criminal"]
+
+
+def test_a_dataset_queued_before_gets_its_file_labelled_rows_once(client, auth_headers, app, tmp_path):
+    """A Dataset whose tasks were made under the old rule (blank rows only)."""
+    dataset_id = _link_dataset(app, tmp_path, {"text": ["a", "b", "c"], "label": ["x", None, "y"]})
+    db.session.add(AnnotationTask(dataset_id=dataset_id, item_index=1, text="b", status="annotated", annotation_label="z", label_source="human"))
+    db.session.commit()
+
+    _next(client, auth_headers)
+    _next(client, auth_headers)
+
+    tasks = _tasks(client, auth_headers)
+    assert [(t["item_index"], t["annotation_label"], t["label_source"]) for t in tasks] == [
+        (0, "x", "file"),
+        (1, "z", "human"),
+        (2, "y", "file"),
+    ]
+
+
+def test_changing_a_file_label_makes_it_a_human_label_and_keeps_the_files(client, auth_headers, app, tmp_path):
+    _link_dataset(app, tmp_path, {"text": ["a"], "label": ["x"]})
+    _next(client, auth_headers)
+    task = _tasks(client, auth_headers)[0]
+
+    client.post(f"/api/annotation/tasks/{task['id']}/save", json={"annotation_label": "y"}, headers=auth_headers)
+
+    changed = _tasks(client, auth_headers)[0]
+    assert (changed["annotation_label"], changed["label_source"], changed["file_label"]) == ("y", "human", "x")
+
+
+def _review(client, auth_headers, **params):
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    resp = client.get(f"/api/annotation/projects/{PROJECT_ID}/tasks?{query}", headers=auth_headers)
+    assert resp.status_code == 200
+    return resp.get_json()
+
+
+def test_labelled_items_list_in_row_order_by_label_a_page_at_a_time(client, auth_headers, app, tmp_path):
+    dataset_id = _link_dataset(app, tmp_path, {"text": list("abcdef"), "label": ["x", "y", None, "x", "x", "y"]})
+    _next(client, auth_headers)
+
+    everything = _review(client, auth_headers, status="annotated", dataset_id=dataset_id)
+    page = _review(client, auth_headers, status="annotated", dataset_id=dataset_id, label="x", limit=2, offset=1)
+
+    assert [t["text"] for t in everything["tasks"]] == ["a", "b", "d", "e", "f"]
+    assert everything["total"] == 5
+    assert [t["text"] for t in page["tasks"]] == ["d", "e"]
+    assert page["total"] == 3
+
+
+def test_held_back_items_can_be_listed_for_review(client, auth_headers, app, tmp_path):
+    dataset_id = _link_dataset(app, tmp_path, {"text": ["a", "b"], "label": ["x", "y"]})
+    _next(client, auth_headers)
+    task = AnnotationTask.query.filter_by(dataset_id=dataset_id, item_index=0).one()
+    task.is_holdout = True
+    db.session.commit()
+
+    assert [t["text"] for t in _review(client, auth_headers, status="annotated")["tasks"]] == ["b"]
+    assert [t["text"] for t in _review(client, auth_headers, status="annotated", include_holdout=1)["tasks"]] == ["a", "b"]
+
+
+def test_an_ner_item_opens_with_the_files_types_as_a_hint(client, auth_headers, app, tmp_path):
+    _link_dataset(app, tmp_path, {"text": ["Smith sued Acme."], "entities": ["PERSON, ORG"]}, task_type="ner")
+    task = _next(client, auth_headers)["task"]
+
+    opened = client.get(f"/api/annotation/tasks/{task['id']}/assignment", headers=auth_headers).get_json()
+
+    assert opened["hint"] == "PERSON, ORG"
+    assert opened["file_label"] == "PERSON, ORG"
+    assert opened["label_source"] is None

@@ -202,9 +202,12 @@ def _draw_holdout(df, dataset, percent, seed):
 
 
 def _file_label_counts(df, dataset, rows, held_back):
-    """Per class, the labels the file gave ``rows`` in or out of the holdout."""
+    """Per class, the labels the file gave ``rows`` in or out of the holdout, for
+    rows with no task. Since #147 every row has one and its file label is on it,
+    so this is empty; counting both would count each label twice."""
     labels = file_labels(df, dataset)
-    labels = labels[labels.index.isin(rows) == held_back]
+    with_task = {task.item_index for task in AnnotationTask.query.filter_by(dataset_id=dataset.id)}
+    labels = labels[(labels.index.isin(rows) == held_back) & ~labels.index.isin(with_task)]
     return {str(k): int(v) for k, v in labels.value_counts().items()}
 
 
@@ -232,9 +235,9 @@ def start_loop(dataset, options):
 
     holdout_percent = _checked_holdout_percent(options.get("holdout_percent", _host_holdout_percent()))
 
-    if not dataset.annotation_tasks:
-        create_annotation_tasks(dataset)
-        db.session.flush()
+    # Adds any missing tasks, file-labelled rows included (a Dataset queued before #147).
+    create_annotation_tasks(dataset)
+    db.session.flush()
     df = read_rows(dataset.file_path)
     seed = secrets.randbelow(2**31)
     holdout = _draw_holdout(df, dataset, holdout_percent, seed)
