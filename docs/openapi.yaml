@@ -111,6 +111,47 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /api/datasets/import/legal-annotation-kit:
+    post:
+      tags: [datasets]
+      summary: Import a vue-legal-annotation-kit task file as a Dataset
+      description: >-
+        One item per document. Document-level tasks become classification (one
+        tag per document; several tags are refused, as there are no multi-label
+        Datasets), span tasks become NER. Where a document has several
+        assignments, the finished one with most annotations is kept and the rest
+        are counted in `set_aside`. Kept assignments are saved on their tasks as
+        human labels, Assignment and all. The row cap applies.
+      operationId: importKitTask
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name]
+              properties:
+                file: { type: string, format: binary, description: Kit TaskData JSON }
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: Dataset created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dataset: { $ref: "#/components/schemas/Dataset" }
+                  labelled: { type: integer, description: Items saved with a label }
+                  set_aside: { type: integer, description: Other assignments with work that were not kept }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Larger than the host's MAX_CONTENT_LENGTH
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /api/datasets/task-types:
     get:
       tags: [datasets]
@@ -152,6 +193,43 @@ paths:
       operationId: deleteDataset
       responses:
         "200": { $ref: "#/components/responses/Message" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/datasets/{dataset_id}/annotations/export:
+    parameters:
+      - $ref: "#/components/parameters/DatasetId"
+    get:
+      tags: [datasets]
+      summary: Export the Dataset's annotation tasks as vue-legal-annotation-kit TaskData
+      description: >-
+        One document per task, in item order, with one assignment for each
+        labelled task (as saved, or built from its label). Served as a download.
+      operationId: exportAnnotations
+      parameters:
+        - name: format
+          in: query
+          schema: { type: string, enum: [legal-annotation-kit], default: legal-annotation-kit }
+      responses:
+        "200":
+          description: Kit TaskData
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  labelset: { type: object }
+                  annotation_level: { type: [string, "null"] }
+                  documents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        full_text: { type: string }
+                        assignments: { type: array, items: { $ref: "#/components/schemas/KitAssignment" } }
+                  counts: { type: object }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/datasets/{dataset_id}/preview:

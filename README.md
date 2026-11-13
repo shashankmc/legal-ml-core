@@ -138,6 +138,18 @@ plain `/save`, confirming an LLM suggestion) replaces the Assignment, which is
 then rebuilt from the label when opened, as it is for tasks saved before the
 payload existed; correcting a typed label renames it inside the Assignment.
 
+### Exchanging annotations as kit JSON
+
+`GET /api/datasets/<id>/annotations/export` downloads a Dataset's annotation
+tasks as kit TaskData: one document per task, with an assignment for each
+labelled one. `POST /api/datasets/import/legal-annotation-kit` (multipart:
+`file`, `name`, `description`) makes a Dataset from such a file, for example one
+exported from Legal Blocks. Document-level tasks become classification, span
+tasks NER. Each kept assignment is saved on its task as a human label, so the
+Dataset trains at once and relations, confidence and metadata survive an export
+and re-import. A document with several assignments keeps the finished one with
+most annotations; the response counts the rest as `set_aside`.
+
 ## LLM annotation
 
 Everything under `/api/llm` is described in `docs/openapi.yaml`. Suggestions never

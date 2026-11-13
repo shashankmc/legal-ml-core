@@ -8,11 +8,11 @@ from ..models import Dataset, AnnotationTask
 from ..active_learning.loop import reset_loops
 from ..annotation_queue import ensure_project_tasks
 from ..annotation_format import (
-    SINGLE_LABEL_TYPES,
     AssignmentError,
     annotation_level,
     assignment_from_task,
     label_from_assignment,
+    offered_labels,
 )
 from ..db_utils import project_belongs_to_owner
 
@@ -225,22 +225,6 @@ def _owned_task(task_id, owner_id):
     return task, dataset, None
 
 
-def _offered_labels(dataset):
-    """The labels an item can be given: those the Dataset names, else (typed
-    labels) every single label saved on it so far, in the order first saved."""
-    if dataset.labels:
-        return list(dataset.labels)
-    if dataset.task_type not in SINGLE_LABEL_TYPES:
-        return []
-    rows = (
-        db.session.query(AnnotationTask.annotation_label)
-        .filter(AnnotationTask.dataset_id == dataset.id, AnnotationTask.status == "annotated")
-        .order_by(AnnotationTask.updated_at)
-        .all()
-    )
-    return list(dict.fromkeys(label for (label,) in rows if label))
-
-
 @annotation_bp.route("/tasks/<task_id>/assignment", methods=["GET"])
 @jwt_required()
 def get_assignment(task_id):
@@ -253,7 +237,11 @@ def get_assignment(task_id):
         "success": True,
         "document": {"name": f"{dataset.name}, item {task.item_index + 1}", "full_text": task.text},
         "assignment": assignment_from_task(task, dataset),
-        "labels": _offered_labels(dataset),
+        # Typed labels come in the order first saved.
+        "labels": offered_labels(
+            dataset,
+            AnnotationTask.query.filter_by(dataset_id=dataset.id, status="annotated").order_by(AnnotationTask.updated_at),
+        ),
         "annotation_level": annotation_level(dataset.task_type),
     }), 200
 

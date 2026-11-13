@@ -8,6 +8,29 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-13
+
+### Added
+
+- A task's annotation is a vue-legal-annotation-kit Assignment (BAIGLE #137).
+  `GET`/`PUT /api/annotation/tasks/<id>/assignment` open and save one; it is
+  stored as sent in `annotation_payload`, and `annotation_label` is derived from
+  it in `annotation_format`: one document tag from the Dataset's labels for the
+  single-label types, the `[{text, start, end, type}]` entity list for NER. A
+  broken rule is a 400 that says which. A task saved before opens with an
+  Assignment built from its label.
+- Annotations export as kit TaskData, `GET /api/datasets/<id>/annotations/export`,
+  and a kit file imports as a Dataset, `POST /api/datasets/import/legal-annotation-kit`
+  (BAIGLE #138). Relations, confidence and metadata survive a round trip.
+
+### Changed
+
+- Migration `0007`: `annotation_tasks.annotation_payload` (JSON) is added and
+  `annotation_label` widens to Text. Hosts run it before deploying. Downgrade cuts
+  labels over 1000 characters to fit.
+- The plain `/save` and LLM confirm replace a task's Assignment (it is rebuilt from
+  the label), reset clears it, and correcting a typed label renames it inside it.
+
 ## [0.11.2] - 2026-11-13
 
 ### Fixed
@@ -437,7 +460,8 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.10.0...v0.11.0

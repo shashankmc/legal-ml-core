@@ -24,6 +24,16 @@ def annotation_level(task_type):
     return None
 
 
+def offered_labels(dataset, tasks):
+    """The labels an item can be given: those the Dataset names, else (typed
+    labels) every single label saved among ``tasks``, in their order."""
+    if dataset.labels:
+        return list(dataset.labels)
+    if dataset.task_type not in SINGLE_LABEL_TYPES:
+        return []
+    return list(dict.fromkeys(t.annotation_label for t in tasks if t.status == "annotated" and t.annotation_label))
+
+
 class AssignmentError(ValueError):
     """The Assignment cannot be saved as it is; the message says why."""
 

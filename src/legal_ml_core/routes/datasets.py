@@ -4,7 +4,10 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 from ..db import db
 from ..dataset_creation import DatasetInvalid, create_dataset
-from ..models import Dataset
+from ..models import AnnotationTask, Dataset
+from ..annotation_format import label_from_assignment
+from ..annotation_queue import LABEL_COLUMNS, create_annotation_tasks
+from ..kit_exchange import ExchangeError, rows_from_task_data, task_data_from_dataset
 from ..text_terms import (
     LABEL_COL_NAMES,
     TEXT_COL_NAMES,
@@ -364,6 +367,95 @@ def upload_dataset():
 
     except RequestEntityTooLarge:
         # Raised while the form is read, before anything is saved (BAIGLE #99).
+        return jsonify({"error": _too_large_message()}), 413
+
+
+KIT_FORMAT = "legal-annotation-kit"
+
+
+@datasets_bp.route("/<dataset_id>/annotations/export", methods=["GET"])
+@jwt_required()
+def export_annotations(dataset_id):
+    """The Dataset's annotation tasks as vue-legal-annotation-kit TaskData."""
+    dataset = Dataset.query.filter_by(id=dataset_id, owner_id=get_jwt_identity()).first()
+    if not dataset:
+        return jsonify({"error": "Dataset not found"}), 404
+    if request.args.get("format", KIT_FORMAT) != KIT_FORMAT:
+        return jsonify({"error": f"Annotations export as {KIT_FORMAT} only."}), 400
+
+    tasks = AnnotationTask.query.filter_by(dataset_id=dataset.id).all()
+    response = jsonify(task_data_from_dataset(dataset, tasks))
+    filename = secure_filename(f"{dataset.name}-annotations.json") or "annotations.json"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response, 200
+
+
+@datasets_bp.route(f"/import/{KIT_FORMAT}", methods=["POST"])
+@jwt_required()
+def import_kit_task():
+    """A vue-legal-annotation-kit task file as a new Dataset. Each document is an
+    item; the Assignment kept for it is saved on its task as a human label, so
+    the Dataset can train at once and the kit can reopen every item as it was."""
+    try:
+        owner_id = get_jwt_identity()
+        file = request.files.get("file")
+        name = request.form.get("name", "").strip()
+        if not file or not file.filename:
+            return jsonify({"error": "No file provided"}), 400
+        if not name:
+            return jsonify({"error": "Dataset name is required"}), 400
+        try:
+            plan = rows_from_task_data(json.load(file.stream))
+        except ValueError as e:  # ExchangeError, or a file that is not JSON
+            message = str(e) if isinstance(e, ExchangeError) else "The file is not JSON."
+            return jsonify({"error": message}), 400
+
+        label_name = LABEL_COLUMNS[plan.task_type]
+        file_path = os.path.join(current_app.config["UPLOAD_FOLDER"], f"{uuid.uuid4()}_kit_import.json")
+        # Labels stay blank in the file: they live on the tasks, with their Assignments.
+        pd.DataFrame({"text": [text for text, _ in plan.items], label_name: ""}).to_json(
+            file_path, orient="records"
+        )
+        try:
+            dataset = create_dataset(
+                owner_id=owner_id,
+                file_path=file_path,
+                name=name,
+                description=request.form.get("description", "").strip(),
+                task_type=plan.task_type,
+                annotation_mode=True,
+                labels=plan.labels,
+            )
+            create_annotation_tasks(dataset)
+            db.session.flush()
+            tasks = {t.item_index: t for t in AnnotationTask.query.filter_by(dataset_id=dataset.id)}
+            labelled = 0
+            for index, (text, assignment) in enumerate(plan.items):
+                if assignment is None:
+                    continue
+                task = tasks[index]
+                task.annotation_label = label_from_assignment(plan.task_type, assignment, text, plan.labels)
+                task.annotation_payload = {**assignment, "id": task.id, "status": "done"}
+                task.status = "annotated"
+                task.label_source = "human"
+                labelled += 1
+            db.session.commit()
+        except DatasetInvalid as refused:
+            db.session.rollback()
+            os.remove(file_path)
+            return jsonify({"error": str(refused)}), 400
+        except Exception:
+            # create_dataset has already committed the Dataset; leave nothing half made.
+            db.session.rollback()
+            Dataset.query.filter_by(owner_id=owner_id, file_path=file_path).delete()
+            db.session.commit()
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise
+
+        return jsonify({"dataset": dataset.to_dict(), "labelled": labelled, "set_aside": plan.set_aside}), 201
+
+    except RequestEntityTooLarge:
         return jsonify({"error": _too_large_message()}), 413
 
 
