@@ -17,6 +17,9 @@ While the version is 0.x, minor releases may contain breaking changes.
   there, went into the JSON payload as is. Ids are now stored as text
   (`annotation_format.stored_payload`), and an Assignment built from a label
   carries its id and annotator as text too.
+- A Dataset imported from a kit file could not train ("empty vocabulary"): the
+  import stored its rows as JSON, but training reads the file as CSV. The import
+  now writes CSV.
 
 ## [0.12.0] - 2026-11-13
 
