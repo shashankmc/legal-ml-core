@@ -581,7 +581,8 @@ def _task_label(task_type):
 def labels_not_categories(dataset):
     """(labelled rows, different labels) when the labels are too many to be
     categories, else None. Read from the counts stored with the Dataset."""
-    label = next((c for c in dataset.columns or [] if c.get("name") == "label"), None)
+    # Older Datasets store bare column names, with no counts to go by.
+    label = next((c for c in dataset.columns or [] if isinstance(c, dict) and c.get("name") == "label"), None)
     if not label or label.get("unique_count") is None:
         return None
     labelled = (dataset.row_count or 0) - (label.get("null_count") or 0)

@@ -95,3 +95,11 @@ def test_creating_a_model_that_cannot_learn_the_labels_is_refused_with_the_same_
 
     assert resp.status_code == 400
     assert resp.get_json()["error"].startswith("Support Vector Machine learns from labels that are categories")
+
+
+def test_columns_stored_as_bare_names_fit_by_task_type_alone(client, auth_headers, app):
+    # Older Datasets store only column names, no counts: nothing says the labels
+    # are not categories, so every classifier stays on offer.
+    body = _fit(client, auth_headers, _dataset(app, ["text", "label"], rows=10))
+
+    assert {t for t, m in body["models"].items() if m["usable"]} == CLASSIFIERS
