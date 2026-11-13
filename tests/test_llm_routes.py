@@ -432,6 +432,23 @@ def test_confirming_records_the_source(client, app, gated, provider):
     assert task.label_source == "llm_confirmed"
 
 
+def test_confirming_replaces_an_assignment_saved_earlier(client, app, gated, provider):
+    suggestion_id, task_id = _one_suggestion(client, app, gated)
+    earlier = {
+        "annotations": [],
+        "document_annotations": [{"id": -1, "label": "permission", "confidence": 0, "metadata": "mine"}],
+        "document_relations": [],
+    }
+    client.put(f"/api/annotation/tasks/{task_id}/assignment", json=earlier, headers=gated)
+
+    client.post(f"/api/llm/suggestions/{suggestion_id}/confirm", json={}, headers=gated)
+
+    tags = client.get(f"/api/annotation/tasks/{task_id}/assignment", headers=gated).get_json()["assignment"][
+        "document_annotations"
+    ]
+    assert [(t["label"], t["metadata"]) for t in tags] == [("obligation", None)]
+
+
 def test_correcting_is_a_human_label(client, app, gated, provider):
     suggestion_id, task_id = _one_suggestion(client, app, gated)
     resp = client.post(

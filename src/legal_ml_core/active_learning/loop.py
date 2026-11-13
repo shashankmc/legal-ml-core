@@ -20,6 +20,7 @@ from ..annotation_queue import (
     read_rows,
     rows_with_text,
 )
+from ..annotation_format import rename_tag
 from ..db import db
 from ..job_state import ACTIVE_JOB_STATUSES, COULD_NOT_START_MESSAGE, sweep_lost_job, sweep_stale_job
 from ..models import ALConfig, ALRound, AnnotationTask, LLMSuggestion, Model, TrainingJob
@@ -341,9 +342,10 @@ def rename_label(dataset, old, new):
         raise LoopError("This Dataset names its labels, so they cannot be changed here.")
     if not isinstance(new, str) or not new.strip():
         raise LoopError("Type the label to use instead.")
-    changed = AnnotationTask.query.filter_by(
-        dataset_id=dataset.id, status="annotated", annotation_label=old
-    ).update({"annotation_label": new.strip()}, synchronize_session=False)
+    changed = AnnotationTask.query.filter_by(dataset_id=dataset.id, status="annotated", annotation_label=old).all()
+    for task in changed:
+        task.annotation_label = new.strip()
+        task.annotation_payload = rename_tag(task.annotation_payload, old, new.strip())
     if not changed:
         raise LoopError("No saved label has that name.", 404)
 

@@ -118,6 +118,26 @@ predictions. The answer is `{"directory", "files", "round_trip": {"ok", "detail"
 "compared"}}`; publish only when `ok`. The request travels on the prediction
 queue as `{"action": "export", ...}`, so no extra worker loop is needed.
 
+## Annotation format
+
+A saved annotation is a
+[vue-legal-annotation-kit](https://github.com/shashankmc/vue-legal-annotation-kit)
+Assignment. `GET /api/annotation/tasks/<id>/assignment` opens a task with its
+text, Assignment, labels and annotation level (`document` for the single-label
+types, `word` for NER); `PUT` saves one. The Assignment is stored as sent in
+`annotation_payload`, and the label training reads, `annotation_label`, is
+derived from it in `legal_ml_core.annotation_format`:
+
+- **Single-label types:** exactly one document tag, from the Dataset's labels if
+  it names them. The tag's label is the label.
+- **NER:** spans inside the text that do not overlap, saved as the entity list
+  `[{text, start, end, type}]` in text order.
+
+A broken rule is a 400 that says which. Anything else that sets a label (the
+plain `/save`, confirming an LLM suggestion) replaces the Assignment, which is
+then rebuilt from the label when opened, as it is for tasks saved before the
+payload existed; correcting a typed label renames it inside the Assignment.
+
 ## LLM annotation
 
 Everything under `/api/llm` is described in `docs/openapi.yaml`. Suggestions never
