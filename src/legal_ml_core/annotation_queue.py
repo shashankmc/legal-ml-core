@@ -38,6 +38,13 @@ MIN_TO_SPLIT = 2
 # need a label. The host reads it too, so both count what the queue would offer.
 ROWS_TO_LABEL = "rows_to_label"
 
+# Key on the same entry: every row with text has a task, file-labelled ones
+# included, so the file need not be read again for the queue (#147).
+ALL_ROWS_QUEUED = "all_rows_queued"
+
+# Where a task's label came from when the uploaded file gave it.
+FILE_LABEL_SOURCE = "file"
+
 
 def _find_column(df, name):
     """The column of ``df`` called ``name``, ignoring case, else ``None``."""
@@ -127,15 +134,36 @@ def record_rows_to_label(dataset, df):
     ]
 
 
-def _recorded_rows_to_label(dataset):
-    for column in dataset.columns or []:
-        if ROWS_TO_LABEL in column:
-            return column[ROWS_TO_LABEL]
-    return None
+def _all_rows_queued(dataset):
+    return any(column.get(ALL_ROWS_QUEUED) for column in dataset.columns or [])
+
+
+def _mark_all_rows_queued(dataset):
+    text_name = (dataset.text_column or "text").lower()
+    dataset.columns = [
+        {**column, ALL_ROWS_QUEUED: True} if str(column["name"]).lower() == text_name else column
+        for column in dataset.columns or []
+    ]
+
+
+def _label_text(value):
+    """A file's label as text, or None when blank; 1.0 read from a CSV reads as 1."""
+    if value is None or (isinstance(value, float) and pd.isna(value)) or not str(value).strip():
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def create_annotation_tasks(dataset):
-    """Add one pending task per unlabelled row of ``dataset``; caller commits."""
+    """Add a task for every row of ``dataset`` with text that has none; caller commits.
+
+    A row the file labels starts labelled (``label_source = "file"``), so it trains
+    as before and a person can change it; a blank row is pending. NER files name
+    entity types, not spans, so every NER row is pending, the types kept as
+    ``file_label``. A Dataset with an active learning loop has its new tasks held
+    back as the loop drew them, and stops counting file labels on the side.
+    """
     if dataset.task_type not in QUEUED_TASK_TYPES:
         return
 
@@ -145,21 +173,43 @@ def create_annotation_tasks(dataset):
         logger.warning("dataset %s: cannot read rows to annotate: %s", dataset.id, e)
         return
 
-    needs_label = _rows_needing_label(df, dataset)
-    if needs_label is None:
+    text_column = _find_column(df, dataset.text_column or "text")
+    if text_column is None:
         return
     record_rows_to_label(dataset, df)
 
-    text_column = _find_column(df, dataset.text_column or "text")
-    for position in needs_label.to_numpy().nonzero()[0]:
+    label_name = dataset.label_column or LABEL_COLUMNS.get(dataset.task_type)
+    label_column = _find_column(df, label_name) if label_name else None
+    labels_rows = dataset.task_type in TRAINED_ON_LABELS
+    existing = {task.item_index for task in dataset.annotation_tasks}
+    config = dataset.al_config
+    held_out = set(config.holdout_indices or []) if config else set()
+
+    added_labelled = False
+    for position in rows_with_text(df, dataset):
+        if position in existing:
+            continue
+        file_label = _label_text(df[label_column].iloc[position]) if label_column is not None else None
+        labelled = labels_rows and file_label is not None
+        added_labelled = added_labelled or labelled
         db.session.add(
             AnnotationTask(
                 dataset_id=dataset.id,
                 item_index=int(position),
                 text=str(df[text_column].iloc[position]),
-                status="pending",
+                status="annotated" if labelled else "pending",
+                annotation_label=file_label if labelled else None,
+                label_source=FILE_LABEL_SOURCE if labelled else None,
+                file_label=file_label,
+                is_holdout=position in held_out,
             )
         )
+    if config is not None and added_labelled:
+        # These labels now live on tasks; counting them from the file too would
+        # count them twice (a loop started before #147).
+        config.file_label_counts = {}
+        config.holdout_file_counts = {}
+    _mark_all_rows_queued(dataset)
 
 
 def ensure_project_tasks(project_id, owner_id):
@@ -167,13 +217,13 @@ def ensure_project_tasks(project_id, owner_id):
 
     Runs when the queue is read rather than when a dataset is linked: linking is
     the host's route, in several places, and this also picks up datasets linked
-    before tasks existed. A dataset that already has tasks is left alone, so
-    saved and skipped work is never touched, and so is one with no rows to label,
-    so its file is not read again.
+    before tasks existed. Only missing tasks are added, so saved and skipped work
+    is never touched; once every row has one the file is not read again. A
+    Dataset queued before #147 (blank rows only) gets its file-labelled rows here.
     """
     datasets = Dataset.query.filter_by(project_id=project_id, owner_id=str(owner_id)).all()
     for dataset in datasets:
-        if dataset.annotation_tasks or _recorded_rows_to_label(dataset) == 0:
+        if dataset.task_type not in QUEUED_TASK_TYPES or _all_rows_queued(dataset):
             continue
         create_annotation_tasks(dataset)
         try:

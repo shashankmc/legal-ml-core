@@ -3,7 +3,7 @@ from collections import Counter
 
 import pytest
 
-from legal_ml_core import ALConfig, AnnotationTask
+from legal_ml_core import ALConfig, AnnotationTask, db
 from tests.active_learning_helpers import label, link_dataset, next_item, start, state
 
 
@@ -102,3 +102,36 @@ def test_the_state_counts_held_back_items_as_they_are_labelled(client, auth_head
     label(client, auth_headers, task["id"], "Gebot")
 
     assert state(client, auth_headers, dataset_id)["holdout"]["label_counts"] == {"Verbot": 8, "Gebot": 3}
+
+
+def _as_started_before_147(dataset_id):
+    """Put a loop back as a loop started before #147 left it: no tasks for rows the
+    file labels, their counts stored on the loop, the Dataset not marked queued."""
+    from legal_ml_core import ALConfig, AnnotationTask
+    from legal_ml_core.annotation_queue import ALL_ROWS_QUEUED, file_labels, read_rows
+    from legal_ml_core.models import Dataset
+
+    dataset = db.session.get(Dataset, dataset_id)
+    config = ALConfig.query.filter_by(dataset_id=dataset_id).one()
+    df = read_rows(dataset.file_path)
+    labels = file_labels(df, dataset)
+    held = set(config.holdout_indices)
+    counts = lambda rows: {k: int(v) for k, v in rows.astype(str).value_counts().items()}
+    config.file_label_counts = counts(labels[~labels.index.isin(held)])
+    config.holdout_file_counts = counts(labels[labels.index.isin(held)])
+    AnnotationTask.query.filter_by(dataset_id=dataset_id, label_source="file").delete()
+    dataset.columns = [{k: v for k, v in c.items() if k != ALL_ROWS_QUEUED} for c in dataset.columns]
+    db.session.commit()
+
+
+def test_a_loop_started_before_147_counts_each_label_once_after_its_rows_get_tasks(client, auth_headers, app, tmp_path):
+    dataset_id, _ = _started(client, auth_headers, app, tmp_path, {"Verbot": 40, "Gebot": 10}, unlabelled=50)
+    before = state(client, auth_headers, dataset_id)
+    _as_started_before_147(dataset_id)
+    assert state(client, auth_headers, dataset_id)["label_counts"] == before["label_counts"]
+
+    next_item(client, auth_headers, dataset_id)  # reading the queue adds the file-labelled tasks
+
+    after = state(client, auth_headers, dataset_id)
+    assert after["label_counts"] == before["label_counts"] == {"Verbot": 32, "Gebot": 8}
+    assert after["holdout"]["label_counts"] == before["holdout"]["label_counts"] == {"Verbot": 8, "Gebot": 2}

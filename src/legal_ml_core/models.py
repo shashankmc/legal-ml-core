@@ -232,7 +232,10 @@ class AnnotationTask(MLBase):
     status = db.Column(
         db.String(50), default="pending"
     )  # 'pending', 'annotated', 'skipped'
-    label_source = db.Column(db.String(20))  # 'human', 'llm_confirmed', 'llm_bulk'
+    label_source = db.Column(db.String(20))  # 'file', 'human', 'llm_confirmed', 'llm_bulk'
+    # The file's own value for the row: its label, kept after a person changes
+    # it, or an NER file's entity types (not spans, so the row stays pending).
+    file_label = db.Column(db.Text)
     score = db.Column(db.Float)  # how much labelling this helps; higher is served first
     is_holdout = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -258,6 +261,7 @@ class AnnotationTask(MLBase):
             "annotation_label": self.annotation_label,
             "status": self.status,
             "label_source": self.label_source,
+            "file_label": self.file_label,
             "score": self.score,
             "is_holdout": self.is_holdout,
             "created_at": self.created_at.isoformat(),

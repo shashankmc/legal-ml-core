@@ -8,6 +8,31 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-13
+
+### Changed
+
+- Every row with text is an annotation task, labelled in the file or not
+  (BAIGLE #147). A row the file labels starts `annotated` with
+  `label_source: file`, trains as before, and can be opened in the kit and
+  changed; a change is a human label. Before, only blank rows had tasks, so a
+  fully labelled Dataset had nothing to annotate and file labels could not be
+  corrected.
+- NER files name entity types, not spans, so every NER row is pending; the
+  types come back as `hint` from `GET /api/annotation/tasks/<id>/assignment`.
+- Labels are read from tasks only: active learning, the holdout and training
+  count each row once. A Dataset queued before gets its file-labelled tasks on
+  its next read (once; marked `all_rows_queued`), and a loop started before
+  stops adding its stored file counts on top.
+
+### Added
+
+- Migration `0008`: `annotation_tasks.file_label`, the file's own value for the
+  row, kept after a person changes the label. In `to_dict` and the assignment.
+- `GET /api/annotation/projects/<id>/tasks` takes `label`, `include_holdout`,
+  `limit` and `offset`, in row order, and returns `total`: a review of existing
+  labels, a page at a time.
+
 ## [0.12.1] - 2026-11-13
 
 ### Fixed
@@ -473,7 +498,8 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.1...v0.11.2

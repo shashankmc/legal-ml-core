@@ -1310,10 +1310,18 @@ paths:
     get:
       tags: [annotation]
       summary: List annotation tasks
+      description: >-
+        In row order. Every row with text has a task; a row the uploaded file
+        labels is `annotated` with `label_source: file`. With `status=annotated`
+        and a `label`, a page at a time, this feeds a review of existing labels.
       operationId: listAnnotationTasks
       parameters:
         - { name: status, in: query, schema: { type: string, enum: [pending, annotated, skipped] } }
         - { name: dataset_id, in: query, schema: { type: string } }
+        - { name: label, in: query, description: Only tasks with this label, schema: { type: string } }
+        - { name: include_holdout, in: query, description: Include held-back items, schema: { type: string, enum: ["1", "true"] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
         "200":
           description: Tasks
@@ -1324,7 +1332,9 @@ paths:
                 properties:
                   success: { type: boolean }
                   tasks: { type: array, items: { $ref: "#/components/schemas/AnnotationTask" } }
-                  count: { type: integer }
+                  count: { type: integer, description: Tasks on this page }
+                  total: { type: integer, description: Tasks matching, across pages }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/annotation/projects/{project_id}/tasks/reset:
@@ -1403,6 +1413,9 @@ paths:
                 required: [success, document, assignment, labels, annotation_level]
                 properties:
                   success: { type: boolean }
+                  label_source: { type: [string, "null"], enum: [file, human, llm_confirmed, llm_bulk, null] }
+                  file_label: { type: [string, "null"], description: "The file's own value: its label, or an NER file's entity types" }
+                  hint: { type: [string, "null"], description: "NER only: the entity types the file lists for this row" }
                   document:
                     type: object
                     properties:
@@ -1999,5 +2012,7 @@ components:
         text: { type: string }
         annotation_label: { type: [string, "null"] }
         status: { type: string, enum: [pending, annotated, skipped] }
+        label_source: { type: [string, "null"], enum: [file, human, llm_confirmed, llm_bulk, null] }
+        file_label: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

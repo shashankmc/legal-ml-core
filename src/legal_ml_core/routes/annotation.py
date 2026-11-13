@@ -8,6 +8,7 @@ from ..models import Dataset, AnnotationTask
 from ..active_learning.loop import reset_loops
 from ..annotation_queue import ensure_project_tasks
 from ..annotation_format import (
+    SPAN_TYPES,
     AssignmentError,
     annotation_level,
     assignment_from_task,
@@ -238,6 +239,11 @@ def get_assignment(task_id):
         "success": True,
         "document": {"name": f"{dataset.name}, item {task.item_index + 1}", "full_text": task.text},
         "assignment": assignment_from_task(task, dataset),
+        # Where the label came from, and what the file said: its label, or for
+        # NER the entity types to mark, shown as a hint (#147).
+        "label_source": task.label_source,
+        "file_label": task.file_label,
+        "hint": task.file_label if dataset.task_type in SPAN_TYPES else None,
         # Typed labels come in the order first saved.
         "labels": offered_labels(
             dataset,
@@ -285,15 +291,39 @@ def list_annotation_tasks(project_id):
 
     status = request.args.get("status")
     dataset_id = request.args.get("dataset_id")
+    label = request.args.get("label")
+    include_holdout = request.args.get("include_holdout") in ("1", "true")
 
-    query = _owned_tasks(project_id, owner_id).filter(AnnotationTask.is_holdout.is_(False))
+    query = _owned_tasks(project_id, owner_id)
+    if not include_holdout:
+        query = query.filter(AnnotationTask.is_holdout.is_(False))
     if status:
         query = query.filter(AnnotationTask.status == status)
     if dataset_id:
         query = query.filter(AnnotationTask.dataset_id == dataset_id)
+    if label:
+        query = query.filter(AnnotationTask.annotation_label == label)
+
+    # Row order, a page at a time when asked: the builder's review of labels.
+    total = query.count()
+    query = query.order_by(AnnotationTask.dataset_id, AnnotationTask.item_index)
+    try:
+        limit = int(request.args["limit"]) if "limit" in request.args else None
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        return jsonify({"success": False, "error": "limit and offset must be whole numbers"}), 400
+    if offset:
+        query = query.offset(max(offset, 0))
+    if limit is not None:
+        query = query.limit(max(limit, 0))
 
     tasks = query.all()
-    return jsonify({"success": True, "tasks": [task.to_dict() for task in tasks], "count": len(tasks)}), 200
+    return jsonify({
+        "success": True,
+        "tasks": [task.to_dict() for task in tasks],
+        "count": len(tasks),
+        "total": total,
+    }), 200
 
 
 @annotation_bp.route("/projects/<project_id>/tasks/reset", methods=["POST"])
