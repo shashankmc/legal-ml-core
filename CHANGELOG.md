@@ -8,6 +8,13 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-13
+
+### Fixed
+
+- Creating, training or listing models for a Dataset whose `columns` are bare
+  names (no counts) failed with a 500. Such a Dataset now fits by task type alone.
+
 ## [0.11.0] - 2026-11-13
 
 ### Added
@@ -419,7 +426,10 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.6.0...v0.7.0
