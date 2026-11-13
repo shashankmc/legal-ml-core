@@ -554,6 +554,19 @@ def test_correcting_a_label_reaches_held_back_items_too(client, auth_headers, ap
     assert task_for(dataset_id, task["item_index"]).annotation_label == "criminal"
 
 
+def test_correcting_a_label_keeps_the_rest_of_a_saved_assignment(client, auth_headers, app, tmp_path):
+    dataset_id = _started(client, auth_headers, app, tmp_path)
+    task = next_item(client, auth_headers, dataset_id)["task"]
+    url = f"/api/annotation/tasks/{task['id']}/assignment"
+    tag = {"id": -1, "label": "crimnal", "confidence": 4, "metadata": "see para 2"}
+    client.put(url, json={"annotations": [], "document_annotations": [tag], "document_relations": []}, headers=auth_headers)
+
+    assert _rename(client, auth_headers, dataset_id, "crimnal", "criminal").status_code == 200
+
+    tags = client.get(url, headers=auth_headers).get_json()["assignment"]["document_annotations"]
+    assert [(t["label"], t["confidence"], t["metadata"]) for t in tags] == [("criminal", 4, "see para 2")]
+
+
 def test_a_label_nothing_uses_cannot_be_corrected(client, auth_headers, app, tmp_path):
     dataset_id = _typo_loop(client, auth_headers, app, tmp_path)
 

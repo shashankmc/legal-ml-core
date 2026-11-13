@@ -1304,6 +1304,65 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/annotation/tasks/{task_id}/assignment:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    get:
+      tags: [annotation]
+      summary: Open a task as a vue-legal-annotation-kit Assignment
+      description: >
+        The item's text, its Assignment (as last saved, or built from its label
+        when it was saved before the kit), the labels it can be given and the
+        kit annotation level.
+      operationId: getAnnotationAssignment
+      responses:
+        "200":
+          description: The task as the kit opens it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, document, assignment, labels, annotation_level]
+                properties:
+                  success: { type: boolean }
+                  document:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      full_text: { type: string }
+                  assignment: { $ref: "#/components/schemas/KitAssignment" }
+                  labels:
+                    type: array
+                    items: { type: string }
+                    description: >
+                      The Dataset's labels, or for typed labels every label
+                      saved on it so far.
+                  annotation_level:
+                    type: [string, "null"]
+                    enum: [document, word, null]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [annotation]
+      summary: Save a task's Assignment and the label derived from it
+      description: >
+        Single-label Datasets need exactly one document tag from the Dataset's
+        labels; NER spans must sit inside the text and not overlap. The label
+        training reads is derived from the Assignment; a broken rule is a 400
+        whose error says which.
+      operationId: saveAnnotationAssignment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KitAssignment" }
+      responses:
+        "200": { $ref: "#/components/responses/AnnotationTaskResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/annotation/tasks/{task_id}/skip:
     parameters:
       - $ref: "#/components/parameters/TaskId"
@@ -1821,6 +1880,38 @@ components:
             metrics: { type: object }
             chart: { $ref: "#/components/schemas/PlotlyFigureJson" }
         created_at: { type: string, format: date-time }
+    KitAssignment:
+      type: object
+      description: >
+        vue-legal-annotation-kit's Assignment. Stored as sent; only the fields
+        below are read.
+      required: [annotations, document_annotations]
+      properties:
+        id: {}
+        status: { type: string, enum: [pending, done] }
+        confidence: { type: integer, minimum: 0, maximum: 5 }
+        document_annotations:
+          type: array
+          items:
+            type: object
+            required: [label]
+            properties:
+              id: { type: integer }
+              label: { type: string }
+              confidence: { type: integer }
+              metadata: { type: [string, "null"] }
+        annotations:
+          type: array
+          items:
+            type: object
+            required: [start, end, label]
+            properties:
+              id: { type: integer }
+              start: { type: integer }
+              end: { type: integer }
+              label: { type: string }
+              text: { type: string }
+        document_relations: { type: array, items: { type: object } }
     AnnotationTask:
       type: object
       properties:

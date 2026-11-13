@@ -376,6 +376,8 @@ def confirm_suggestion(suggestion_id):
     corrected = label != suggestion.label
     suggestion.status = "corrected" if corrected else "accepted"
     task.annotation_label = label
+    # The suggestion's label replaces any Assignment; it is rebuilt from the label.
+    task.annotation_payload = None
     task.status = "annotated"
     task.label_source = "human" if corrected else "llm_confirmed"
     task.updated_at = datetime.utcnow()

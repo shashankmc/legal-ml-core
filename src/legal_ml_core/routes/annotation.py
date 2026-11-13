@@ -7,6 +7,13 @@ from ..db import db
 from ..models import Dataset, AnnotationTask
 from ..active_learning.loop import reset_loops
 from ..annotation_queue import ensure_project_tasks
+from ..annotation_format import (
+    SINGLE_LABEL_TYPES,
+    AssignmentError,
+    annotation_level,
+    assignment_from_task,
+    label_from_assignment,
+)
 from ..db_utils import project_belongs_to_owner
 
 # url_prefix is supplied by init_ml_feature at registration time, alongside the
@@ -150,6 +157,8 @@ def save_annotation(task_id):
             task.annotation_label = json.dumps(annotation_label)
         else:
             task.annotation_label = str(annotation_label)
+        # A plain label replaces any Assignment; it is rebuilt from the label.
+        task.annotation_payload = None
 
         task.status = "annotated"
         task.label_source = "human"
@@ -205,6 +214,76 @@ def get_annotation_task(task_id):
     return jsonify({"success": True, "task": task.to_dict()}), 200
 
 
+def _owned_task(task_id, owner_id):
+    """``(task, dataset, error_response)`` for a task of the caller's own Dataset."""
+    task = AnnotationTask.query.get(task_id)
+    if not task:
+        return None, None, (jsonify({"success": False, "error": "Task not found"}), 404)
+    dataset = Dataset.query.get(task.dataset_id)
+    if not dataset or str(dataset.owner_id) != str(owner_id):
+        return None, None, (jsonify({"success": False, "error": "Unauthorized"}), 403)
+    return task, dataset, None
+
+
+def _offered_labels(dataset):
+    """The labels an item can be given: those the Dataset names, else (typed
+    labels) every single label saved on it so far, in the order first saved."""
+    if dataset.labels:
+        return list(dataset.labels)
+    if dataset.task_type not in SINGLE_LABEL_TYPES:
+        return []
+    rows = (
+        db.session.query(AnnotationTask.annotation_label)
+        .filter(AnnotationTask.dataset_id == dataset.id, AnnotationTask.status == "annotated")
+        .order_by(AnnotationTask.updated_at)
+        .all()
+    )
+    return list(dict.fromkeys(label for (label,) in rows if label))
+
+
+@annotation_bp.route("/tasks/<task_id>/assignment", methods=["GET"])
+@jwt_required()
+def get_assignment(task_id):
+    """The task as the kit opens it: the item's text, its Assignment, the labels
+    it can be given and the annotation level."""
+    task, dataset, error = _owned_task(task_id, get_jwt_identity())
+    if error:
+        return error
+    return jsonify({
+        "success": True,
+        "document": {"name": f"{dataset.name}, item {task.item_index + 1}", "full_text": task.text},
+        "assignment": assignment_from_task(task, dataset),
+        "labels": _offered_labels(dataset),
+        "annotation_level": annotation_level(dataset.task_type),
+    }), 200
+
+
+@annotation_bp.route("/tasks/<task_id>/assignment", methods=["PUT"])
+@jwt_required()
+def save_assignment(task_id):
+    """Save the kit's Assignment: stored as sent, with the label training reads
+    derived from it. A broken rule is a 400 that says which."""
+    task, dataset, error = _owned_task(task_id, get_jwt_identity())
+    if error:
+        return error
+    assignment = request.get_json(silent=True)
+    try:
+        label = label_from_assignment(
+            dataset.task_type, assignment, task.text, list(dataset.labels or [])
+        )
+    except AssignmentError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    task.annotation_payload = {**assignment, "id": task.id, "status": "done"}
+    task.annotation_label = label
+    task.status = "annotated"
+    task.label_source = "human"
+    task.updated_at = datetime.utcnow()
+    dataset.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"success": True, "task": task.to_dict()}), 200
+
+
 @annotation_bp.route("/projects/<project_id>/tasks", methods=["GET"])
 @jwt_required()
 def list_annotation_tasks(project_id):
@@ -241,6 +320,7 @@ def reset_annotation_tasks(project_id):
         for task in tasks:
             task.status = "pending"
             task.annotation_label = None
+            task.annotation_payload = None
             task.label_source = None
             task.updated_at = datetime.utcnow()
 

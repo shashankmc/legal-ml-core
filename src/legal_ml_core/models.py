@@ -223,7 +223,12 @@ class AnnotationTask(MLBase):
     dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False)
     item_index = db.Column(db.Integer, nullable=False)
     text = db.Column(db.Text, nullable=False)
-    annotation_label = db.Column(db.String(1000))  # JSON string for multi-label/NER
+    # The label training reads: a class name, or an NER entity list as JSON.
+    # Derived from annotation_payload on each save (annotation_format.py).
+    annotation_label = db.Column(db.Text)
+    # The kit's Assignment as last saved; None for a task saved before the kit,
+    # which is then built from annotation_label when opened.
+    annotation_payload = db.Column(db.JSON)
     status = db.Column(
         db.String(50), default="pending"
     )  # 'pending', 'annotated', 'skipped'
