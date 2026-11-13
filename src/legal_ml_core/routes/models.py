@@ -941,6 +941,10 @@ def create_model():
             if not project_belongs_to_owner(db.session, explicit_project_id, owner_id):
                 return jsonify({"error": "Project not found"}), 404
             resolved_project_id = explicit_project_id
+            # A Dataset outside any Project joins the one its Model is made in, so
+            # the Project shows both. One already filed elsewhere stays there.
+            if dataset.project_id is None:
+                dataset.project_id = explicit_project_id
         else:
             resolved_project_id = dataset.project_id
 

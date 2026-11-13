@@ -97,3 +97,17 @@ def test_save_and_reload_model(fake_redis, classification_df, tmp_path):
     assert loaded["model"] is not None
     assert loaded["vectorizer"] is not None
     assert loaded["label_encoder"] is not None
+
+
+@pytest.mark.parametrize("model_type", ["logistic_regression", "naive_bayes"])
+def test_labels_with_a_single_row_still_train(fake_redis, classification_df, model_type):
+    # A stratified split needs two rows of every label; with a label seen once
+    # (common in imported data) the split is made without stratifying.
+    rare = pd.DataFrame({"text": ["a one-off ruling on maritime salvage", "a lone tax matter"], "label": ["salvage", "tax"]})
+    df = pd.concat([classification_df, rare], ignore_index=True)
+    trainer = MLModelTrainer(redis_client=fake_redis)
+    texts, labels, _ = trainer.preprocess_data(df, "classification", {})
+
+    metrics = trainer.train_classification_model(texts, labels, model_type, {"model_id": "rare-1"})
+
+    assert 0.0 <= metrics["accuracy"] <= 1.0

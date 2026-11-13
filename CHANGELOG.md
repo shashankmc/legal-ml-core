@@ -8,6 +8,17 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-13
+
+### Fixed
+
+- A Model made in a Project now brings its Dataset into that Project when the
+  Dataset is in none, so the Project page lists the Dataset with its Model.
+  A Dataset already in another Project stays there.
+- Training failed with sklearn's "least populated classes ... only 1 member"
+  when a label had a single row. The train/test split now stratifies only when
+  it can, and otherwise splits at random.
+
 ## [0.11.1] - 2026-11-13
 
 ### Fixed
@@ -426,7 +437,8 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.9.0...v0.10.0
