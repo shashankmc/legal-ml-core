@@ -171,3 +171,33 @@ def test_a_stored_payload_opens_as_saved_with_the_task_status():
 
 def test_a_skipped_task_opens_as_pending():
     assert assignment_from_task(_task(status="skipped"), _dataset())["status"] == "pending"
+
+
+# Postgres hands back ids as uuid.UUID, which JSON cannot hold (BAIGLE #141 QA).
+
+
+def test_a_saved_payload_holds_the_task_id_as_text_even_when_the_database_gives_a_uuid():
+    import uuid
+
+    from legal_ml_core.annotation_format import stored_payload
+
+    task_id = uuid.uuid4()
+    payload = stored_payload(_assignment(tags=["Void"]), SimpleNamespace(id=task_id))
+
+    assert payload["id"] == str(task_id)
+    assert payload["status"] == "done"
+    json.dumps(payload)
+
+
+def test_an_assignment_built_from_a_label_is_json_even_with_uuid_ids():
+    import uuid
+
+    task = SimpleNamespace(
+        id=uuid.uuid4(), item_index=0, text=TEXT, annotation_label="Void", status="annotated", annotation_payload=None
+    )
+    dataset = SimpleNamespace(owner_id=uuid.uuid4(), task_type="classification")
+
+    assignment = assignment_from_task(task, dataset)
+
+    assert assignment["id"] == str(task.id) and assignment["annotator"] == str(dataset.owner_id)
+    json.dumps(assignment)

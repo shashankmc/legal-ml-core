@@ -5,7 +5,7 @@ from werkzeug.utils import secure_filename
 from ..db import db
 from ..dataset_creation import DatasetInvalid, create_dataset
 from ..models import AnnotationTask, Dataset
-from ..annotation_format import label_from_assignment
+from ..annotation_format import label_from_assignment, stored_payload
 from ..annotation_queue import LABEL_COLUMNS, create_annotation_tasks
 from ..kit_exchange import ExchangeError, rows_from_task_data, task_data_from_dataset
 from ..text_terms import (
@@ -435,7 +435,7 @@ def import_kit_task():
                     continue
                 task = tasks[index]
                 task.annotation_label = label_from_assignment(plan.task_type, assignment, text, plan.labels)
-                task.annotation_payload = {**assignment, "id": task.id, "status": "done"}
+                task.annotation_payload = stored_payload(assignment, task)
                 task.status = "annotated"
                 task.label_source = "human"
                 labelled += 1

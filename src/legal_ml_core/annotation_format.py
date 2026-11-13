@@ -109,13 +109,19 @@ def _check_shape(assignment):
             raise AssignmentError(f"{key} must be a list of objects with {', '.join(fields)}.")
 
 
+def stored_payload(assignment, task):
+    """The Assignment as a task stores it: as sent, with the task's id and
+    "done". Ids go in as text: Postgres hands back uuid.UUID, which JSON cannot hold."""
+    return {**assignment, "id": str(task.id), "status": "done"}
+
+
 def assignment_from_task(task, dataset):
     """The Assignment to open ``task`` with: its stored payload, or one built from
     ``annotation_label`` for a task saved before the kit. Its id and status always
     come from the task, so they never drift from the queue."""
     status = "done" if task.status == "annotated" else "pending"
     if task.annotation_payload:
-        return {**task.annotation_payload, "id": task.id, "status": status}
+        return {**task.annotation_payload, "id": str(task.id), "status": status}
 
     tags, spans = [], []
     if task.annotation_label and dataset.task_type in SINGLE_LABEL_TYPES:
@@ -135,8 +141,8 @@ def assignment_from_task(task, dataset):
             for i, e in enumerate(_stored_entities(task.annotation_label))
         ]
     return {
-        "id": task.id,
-        "annotator": dataset.owner_id,
+        "id": str(task.id),
+        "annotator": str(dataset.owner_id),
         "order": task.item_index + 1,
         "status": status,
         "confidence": 0,
