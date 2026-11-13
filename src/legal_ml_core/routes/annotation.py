@@ -13,6 +13,7 @@ from ..annotation_format import (
     assignment_from_task,
     label_from_assignment,
     offered_labels,
+    stored_payload,
 )
 from ..db_utils import project_belongs_to_owner
 
@@ -262,7 +263,7 @@ def save_assignment(task_id):
     except AssignmentError as e:
         return jsonify({"success": False, "error": str(e)}), 400
 
-    task.annotation_payload = {**assignment, "id": task.id, "status": "done"}
+    task.annotation_payload = stored_payload(assignment, task)
     task.annotation_label = label
     task.status = "annotated"
     task.label_source = "human"

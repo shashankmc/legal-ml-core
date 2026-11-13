@@ -5,7 +5,7 @@ from werkzeug.utils import secure_filename
 from ..db import db
 from ..dataset_creation import DatasetInvalid, create_dataset
 from ..models import AnnotationTask, Dataset
-from ..annotation_format import label_from_assignment
+from ..annotation_format import label_from_assignment, stored_payload
 from ..annotation_queue import LABEL_COLUMNS, create_annotation_tasks
 from ..kit_exchange import ExchangeError, rows_from_task_data, task_data_from_dataset
 from ..text_terms import (
@@ -411,11 +411,10 @@ def import_kit_task():
             return jsonify({"error": message}), 400
 
         label_name = LABEL_COLUMNS[plan.task_type]
-        file_path = os.path.join(current_app.config["UPLOAD_FOLDER"], f"{uuid.uuid4()}_kit_import.json")
-        # Labels stay blank in the file: they live on the tasks, with their Assignments.
-        pd.DataFrame({"text": [text for text, _ in plan.items], label_name: ""}).to_json(
-            file_path, orient="records"
-        )
+        # CSV, as training reads the stored file with pd.read_csv. Labels stay blank
+        # in the file: they live on the tasks, with their Assignments.
+        file_path = os.path.join(current_app.config["UPLOAD_FOLDER"], f"{uuid.uuid4()}_kit_import.csv")
+        pd.DataFrame({"text": [text for text, _ in plan.items], label_name: ""}).to_csv(file_path, index=False)
         try:
             dataset = create_dataset(
                 owner_id=owner_id,
@@ -435,7 +434,7 @@ def import_kit_task():
                     continue
                 task = tasks[index]
                 task.annotation_label = label_from_assignment(plan.task_type, assignment, text, plan.labels)
-                task.annotation_payload = {**assignment, "id": task.id, "status": "done"}
+                task.annotation_payload = stored_payload(assignment, task)
                 task.status = "annotated"
                 task.label_source = "human"
                 labelled += 1

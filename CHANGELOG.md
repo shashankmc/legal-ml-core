@@ -8,6 +8,19 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-13
+
+### Fixed
+
+- Saving a kit Assignment (`PUT /api/annotation/tasks/<id>/assignment`) and
+  importing a kit file failed with a 500 on Postgres: the task id, a `uuid.UUID`
+  there, went into the JSON payload as is. Ids are now stored as text
+  (`annotation_format.stored_payload`), and an Assignment built from a label
+  carries its id and annotator as text too.
+- A Dataset imported from a kit file could not train ("empty vocabulary"): the
+  import stored its rows as JSON, but training reads the file as CSV. The import
+  now writes CSV.
+
 ## [0.12.0] - 2026-11-13
 
 ### Added
@@ -460,7 +473,8 @@ version was not tagged; it corresponds to commit `02c5b61`.
 - Worker foreign-key resolution and the missing `psycopg2` dependency.
 - Model/task compatibility checks, live progress and failure reasons.
 
-[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/shashankmc/legal-ml-core/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/shashankmc/legal-ml-core/compare/v0.11.0...v0.11.1

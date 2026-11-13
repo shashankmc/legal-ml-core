@@ -192,3 +192,17 @@ def test_a_failure_after_the_dataset_is_made_leaves_no_dataset_or_file(client, a
     db.session.rollback()
     assert Dataset.query.count() == 0
     assert list(Path(app.config["UPLOAD_FOLDER"]).iterdir()) == []
+
+
+def test_an_imported_dataset_reads_as_csv_the_way_training_reads_it(client, auth_headers, app):
+    """Training reads the stored file with pd.read_csv (compute/tasks.py); found in BAIGLE #141 QA."""
+    import pandas as pd
+
+    dataset_id = _import(client, auth_headers, _ner_file()).get_json()["dataset"]["id"]
+    with app.app_context():
+        path = db.session.get(Dataset, dataset_id).file_path
+
+    df = pd.read_csv(path)
+
+    assert path.endswith(".csv")
+    assert df["text"].tolist() == [TEXT, "Nobody labelled this."]
