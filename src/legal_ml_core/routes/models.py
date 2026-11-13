@@ -559,6 +559,81 @@ def compatible_models_for_task(task_type):
     return result
 
 
+# What each model category needs, said when a Dataset's task type is the wrong one.
+_CATEGORY_NEEDS = {
+    "classification": "learns labels: it trains on Text Classification, Document Classification or Judgment Prediction Datasets.",
+    "transformer": "learns labels: it trains on Text Classification, Document Classification or Judgment Prediction Datasets.",
+    "clustering": "groups texts without labels: it trains on Clustering or Topic modelling Datasets.",
+    "topic_modeling": "finds topics in texts without labels: it trains on Topic modelling or Clustering Datasets.",
+}
+# Categories that learn from the label column, and the fewest examples per label
+# (on average) for the labels to count as categories rather than answers or free text.
+_LEARNS_LABELS = {"classification", "transformer"}
+MIN_EXAMPLES_PER_LABEL = 2
+
+
+def _task_label(task_type):
+    from .datasets import TASK_TYPES
+
+    return next((t["label"] for t in TASK_TYPES if t["value"] == task_type), task_type)
+
+
+def labels_not_categories(dataset):
+    """(labelled rows, different labels) when the labels are too many to be
+    categories, else None. Read from the counts stored with the Dataset."""
+    label = next((c for c in dataset.columns or [] if c.get("name") == "label"), None)
+    if not label or label.get("unique_count") is None:
+        return None
+    labelled = (dataset.row_count or 0) - (label.get("null_count") or 0)
+    different = label["unique_count"]
+    if labelled > 0 and different > 1 and labelled < different * MIN_EXAMPLES_PER_LABEL:
+        return labelled, different
+    return None
+
+
+def model_fit_refusal(model_type, dataset):
+    """Why this model cannot train this Dataset, in words a student can act on, or None."""
+    category = model_category_for(model_type)
+    name = AVAILABLE_MODELS[category][model_type]["name"]
+    task_type = dataset.task_type
+    if task_type in UNSUPPORTED_TASK_TYPES or task_type not in _TASK_CATEGORIES:
+        return f"Training for {_task_label(task_type)} Datasets is not available yet."
+    if category not in _TASK_CATEGORIES[task_type]:
+        return f"{name} {_CATEGORY_NEEDS[category]}"
+    shape = labels_not_categories(dataset) if category in _LEARNS_LABELS else None
+    if shape:
+        labelled, different = shape
+        return (
+            f"{name} learns from labels that are categories, but this Dataset has {different:,} different "
+            f"labels in {labelled:,} labelled rows: fewer than {MIN_EXAMPLES_PER_LABEL} examples each."
+        )
+    return None
+
+
+NOT_CATEGORIES_ADVICE = (
+    "These labels look like answers or free text, not categories. Give the rows a few "
+    "categories (annotate them, or re-label the file) to train a model on them."
+)
+
+
+def model_fit(dataset):
+    """Every model, with whether it can train this Dataset and why not; and, when
+    none can, what would make the Dataset trainable."""
+    models = {}
+    for category, entries in AVAILABLE_MODELS.items():
+        for model_type, config in entries.items():
+            reason = model_fit_refusal(model_type, dataset)
+            models[model_type] = {**config, "category": category, "usable": reason is None, "reason": reason}
+    advice = None
+    if not any(m["usable"] for m in models.values()):
+        task_type = dataset.task_type
+        if task_type in UNSUPPORTED_TASK_TYPES or task_type not in _TASK_CATEGORIES:
+            advice = f"Training for {_task_label(task_type)} Datasets is not available yet."
+        elif labels_not_categories(dataset):
+            advice = NOT_CATEGORIES_ADVICE
+    return {"models": models, "advice": advice}
+
+
 def validate_model_task_compatibility(model_type, task_type):
     """Return (ok, error_message). Explains *why* a pairing is invalid."""
     if task_type in UNSUPPORTED_TASK_TYPES or task_type not in _TASK_CATEGORIES:
@@ -669,6 +744,14 @@ def parameter_refusal(model_type, parameters, dataset=None):
 @jwt_required()
 def get_available_models():
     try:
+        # With a Dataset: every model, usable or not, and why (BAIGLE: model choice by data).
+        dataset_id = request.args.get("dataset_id")
+        if dataset_id:
+            dataset = Dataset.query.filter_by(id=dataset_id, owner_id=get_jwt_identity()).first()
+            if not dataset:
+                return jsonify({"error": "Dataset not found"}), 404
+            return jsonify(model_fit(dataset)), 200
+
         task_type = request.args.get("task_type")
 
         if task_type:
@@ -839,6 +922,10 @@ def create_model():
         )
         if not ok:
             return jsonify({"error": compat_error}), 400
+        # Labels that are not categories (answers, free text) teach a classifier nothing.
+        fit_error = model_fit_refusal(model_type, dataset)
+        if fit_error:
+            return jsonify({"error": fit_error}), 400
 
         # Validate parameters
         refusal = parameter_refusal(model_type, data["parameters"], dataset)
@@ -1398,6 +1485,10 @@ def start_training_job(owner_id, model_id, data, al_round_id=None):
     ok, compat_error = validate_model_task_compatibility(model.model_type, dataset.task_type)
     if not ok:
         return {"error": compat_error}, 400
+    fit_error = model_fit_refusal(model.model_type, dataset)
+    if fit_error:
+        db.session.rollback()  # release the model row lock
+        return {"error": fit_error}, 400
 
     # A Model saved before a combination was refused must not reach the worker.
     refusal = parameter_refusal(model.model_type, model.parameters or {}, dataset)

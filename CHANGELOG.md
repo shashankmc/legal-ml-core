@@ -8,6 +8,22 @@ While the version is 0.x, minor releases may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-13
+
+### Added
+
+- `GET /api/models/available?dataset_id=<id>`: every model, with `usable` and a
+  `reason` a student can act on, and `advice` when none fits. Decided from the
+  task type and the label counts stored with the Dataset (no file read).
+- `model_fit(dataset)` and `model_fit_refusal(model_type, dataset)`.
+
+### Changed
+
+- Creating or training a classifier or transformer on a Dataset whose labels are
+  not categories (fewer than 2 labelled rows per label on average, e.g. answers
+  uploaded as labels) answers 400 with the reason, instead of training a model
+  that cannot learn.
+
 ## [0.10.0] - 2026-11-12
 
 ### Added
