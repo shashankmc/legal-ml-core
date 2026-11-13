@@ -261,12 +261,23 @@ paths:
   /api/models/available:
     get:
       tags: [models]
-      summary: Model catalogue, optionally filtered by task type
+      summary: Model catalogue, optionally filtered by task type, or fitted to a Dataset
       operationId: availableModels
       parameters:
         - name: task_type
           in: query
           schema: { $ref: "#/components/schemas/TaskTypeValue" }
+        - name: dataset_id
+          in: query
+          description: >-
+            One of the caller's Datasets. The answer is then `{"models": {model_type:
+            {...catalogue entry, "category", "usable", "reason"}}, "advice"}`: every
+            model, whether it can train this Dataset and, when not, why (the task
+            type, or labels that are not categories: fewer than 2 labelled rows per
+            label on average). `advice` says what would make the Dataset trainable
+            when no model can. Creating or training such a pair answers 400 with the
+            same reason.
+          schema: { type: string }
       responses:
         "200":
           description: >-
@@ -286,6 +297,7 @@ paths:
                   models: {}
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "No such Dataset of the caller's" }
   /api/models/:
     get:
       tags: [models]
